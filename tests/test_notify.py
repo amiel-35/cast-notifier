@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from homeassistant.core import HomeAssistant
+import pytest
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_mock_service,
@@ -16,6 +18,7 @@ from custom_components.cast_notifier.const import (
     CONF_VOLUME,
     DOMAIN,
 )
+from custom_components.cast_notifier.notify import async_get_service
 
 MEDIA_PLAYER = "media_player.kitchen"
 
@@ -172,3 +175,88 @@ async def test_notify_entity_speaks_the_message(hass: HomeAssistant) -> None:
     assert len(speak_calls) == 1
     assert speak_calls[0].data["message"] == "Bonsoir"
     assert speak_calls[0].data["media_player_entity_id"] == MEDIA_PLAYER
+
+
+async def test_legacy_service_surfaces_a_tts_failure(hass: HomeAssistant) -> None:
+    """A failing `tts.speak` reaches the caller as a HomeAssistantError (B3).
+
+    Only a `deny_domains` refusal is swallowed; a broken engine is a bug
+    the automation author must see.
+    """
+    hass.states.async_set(MEDIA_PLAYER, "idle")
+
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    async def _failing_speak(call: ServiceCall) -> None:
+        raise HomeAssistantError("TTS engine is unavailable")
+
+    hass.services.async_register("tts", "speak", _failing_speak)
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "notify", "cast_kitchen", {"message": "Hello"}, blocking=True
+        )
+
+
+async def test_legacy_service_surfaces_invalid_data(hass: HomeAssistant) -> None:
+    """A malformed `data` payload reaches the caller, not a TypeError (I5c)."""
+    hass.states.async_set(MEDIA_PLAYER, "idle")
+
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    speak_calls = async_mock_service(hass, "tts", "speak")
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "notify",
+            "cast_kitchen",
+            {"message": "Hello", "data": {"volume": 11}},
+            blocking=True,
+        )
+
+    assert len(speak_calls) == 0
+
+
+async def test_unexpected_error_is_wrapped_as_home_assistant_error(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-HomeAssistantError from the speaker still reaches the caller (B3)."""
+    hass.states.async_set(MEDIA_PLAYER, "idle")
+
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    async def _boom(self: object, request: object) -> None:
+        raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(
+        "custom_components.cast_notifier.speaker.CastSpeaker.async_speak", _boom
+    )
+
+    with pytest.raises(HomeAssistantError, match="could not speak"):
+        await hass.services.async_call(
+            "notify", "cast_kitchen", {"message": "Hello"}, blocking=True
+        )
+
+
+async def test_legacy_platform_refuses_yaml_setup(hass: HomeAssistant) -> None:
+    """Without discovery info (i.e. from YAML) no service is created."""
+    assert await async_get_service(hass, {}, None) is None
+    assert await async_get_service(hass, {}, {}) is None
+
+
+async def test_legacy_platform_refuses_an_unloaded_entry(hass: HomeAssistant) -> None:
+    """A discovery pointing at an entry with no runtime data is ignored."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    assert await async_get_service(hass, {}, {"entry_id": entry.entry_id}) is None
+    assert await async_get_service(hass, {}, {"entry_id": "does-not-exist"}) is None

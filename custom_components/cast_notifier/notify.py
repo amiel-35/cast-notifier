@@ -13,7 +13,10 @@ it to the shared `CastSpeaker`. A refusal (`deny_domains`) is logged and
 swallowed rather than raised to the caller, matching how a notify service is
 expected to behave when a message cannot be delivered: the caller (an
 `alert`, an automation) should not crash because Cast Notifier decided a
-message about an alarm should stay silent.
+message about an alarm should stay silent. Every *other* failure -- an
+unavailable TTS engine, a malformed `data` payload -- does surface to the
+caller as a `HomeAssistantError`, because that is a bug to fix, not a
+policy decision.
 """
 
 from __future__ import annotations
@@ -24,23 +27,38 @@ from typing import Any
 from homeassistant.components.notify import NotifyEntity, NotifyEntityFeature
 from homeassistant.components.notify.const import ATTR_DATA
 from homeassistant.components.notify.legacy import BaseNotificationService
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import CastNotifierConfigEntry, CastNotifierRuntimeData
+from .const import DOMAIN
 from .speaker import CastNotifierRefused, CastSpeaker, SpeakRequest
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _async_speak(speaker: CastSpeaker, request: SpeakRequest) -> None:
-    """Speak a request, logging (not raising) a `deny_domains` refusal."""
+    """Speak a request, logging (not raising) a `deny_domains` refusal.
+
+    Anything else is raised to the caller as a `HomeAssistantError`, after
+    `CastSpeaker` has restored any volume it changed: silently swallowing a
+    failed announcement would leave an automation believing it spoke.
+    """
     try:
         await speaker.async_speak(request)
     except CastNotifierRefused as err:
         _LOGGER.warning("Message refused: %s", err)
+    except HomeAssistantError:
+        # Already a clear, caller-facing error (invalid `data`, a failing
+        # `tts.speak`, ...). Let it through untouched.
+        raise
+    except Exception as err:
+        raise HomeAssistantError(
+            f"Cast Notifier could not speak on {speaker.config.media_player}: {err}"
+        ) from err
 
 
 async def async_get_service(
@@ -63,7 +81,12 @@ async def async_get_service(
         return None
 
     runtime_data: CastNotifierRuntimeData = entry.runtime_data
-    return CastNotificationService(hass, runtime_data.speaker)
+    service = CastNotificationService(hass, runtime_data.speaker)
+    # Remembered so unloading the entry can drop this instance from
+    # `notify.legacy`'s registry along with the service itself; core never
+    # does that for a config entry (see __init__.py).
+    runtime_data.legacy_service = service
+    return service
 
 
 class CastNotificationService(BaseNotificationService):
@@ -95,16 +118,29 @@ async def async_setup_entry(
 
 
 class CastNotifyEntity(NotifyEntity):
-    """Modern notify entity that speaks via the `CastSpeaker`."""
+    """Modern notify entity that speaks via the `CastSpeaker`.
+
+    One service device per config entry, named after the entry (i.e. after
+    the Cast player it speaks on), and `_attr_name = None` so the entity
+    takes that device's name. Without this, every entry produced the same
+    `notify.cast_notifier` friendly name and collided on entity id.
+    """
 
     _attr_has_entity_name = True
-    _attr_name = "Cast Notifier"
+    _attr_name = None
+    _attr_translation_key = "cast_notifier"
     _attr_supported_features = NotifyEntityFeature(0)
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(self, entry: CastNotifierConfigEntry) -> None:
         """Initialize the entity."""
         self._attr_unique_id = f"{entry.entry_id}_notify_entity"
         self._speaker: CastSpeaker = entry.runtime_data.speaker
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            entry_type=DeviceEntryType.SERVICE,
+            manufacturer="Cast Notifier",
+            name=entry.title or self._speaker.config.media_player,
+        )
 
     async def async_send_message(self, message: str, title: str | None = None) -> None:
         """Speak `message` on the configured Cast player.
