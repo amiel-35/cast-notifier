@@ -91,34 +91,85 @@ volume happens to be set, with no way to know when it is safe to act again
 
 ## What Cast Notifier does about it (`speaker.py`)
 
-`CastSpeaker.async_speak`, for a call carrying a volume (from the config
-entry's `volume` option or a per-call `data.volume` override):
+`CastSpeaker.async_speak` validates the call's `data` payload, applies the
+deny list, then takes a per-speaker `asyncio.Lock` and, for a call carrying
+a volume (from the config entry's `volume` option or a per-call
+`data.volume` override):
 
 1. Reads the player's current `volume_level` (`ATTR_MEDIA_VOLUME_LEVEL`,
    `homeassistant/components/media_player/const.py`) and remembers it.
 2. Calls `media_player.volume_set` (`SERVICE_VOLUME_SET`,
    `homeassistant/const.py`) to the requested volume.
-3. Records the player's current `state`.
+3. Records a *fingerprint* of what the player is doing: its `state` plus
+   `ATTR_MEDIA_CONTENT_ID`, `ATTR_APP_ID` and `ATTR_MEDIA_TITLE`.
 4. Calls `tts.speak` as above.
-5. Waits for the player to leave that state and come back to it --
-   `homeassistant/helpers/event.py::async_track_state_change_event` -- capped
-   at `PLAYBACK_TIMEOUT` (30s) in total so a player that never truly
-   settles back (e.g. it kept playing something unrelated) cannot block a
-   caller forever.
+5. Waits for the announcement to run its course (see below).
 6. If `restore_volume` (default `True`), restores the volume from step 1.
+
+Steps 4 to 6 are one `try`/`finally`: a `tts.speak` that raises -- an
+unavailable engine, a dead player -- must never leave a speaker stuck at
+the announcement volume, so the restore happens on the way out and the
+error is then re-raised to the caller.
 
 If no volume is configured for the call, none of this runs: Cast Notifier
 just calls `tts.speak` and returns, exactly like calling the action
 directly, only reachable as a `notify.*` service.
 
-`CastSpeaker` also checks `MediaPlayerEntityFeature.MEDIA_ANNOUNCE` on the
-target (`ATTR_SUPPORTED_FEATURES` in the entity's state attributes) and
-skips its own volume/wait dance when the target declares that support: such
-an entity is expected to duck and wait for the announcement inside its own
-`async_play_media`, in which case managing volume manually would fight the
-platform instead of helping it. Against a real Cast player this branch
-never triggers today (see above); it exists so that this integration, or a
-future Cast release, benefits automatically once/if that changes.
+### Two gates before any volume is touched
+
+`CastSpeaker` reads `ATTR_SUPPORTED_FEATURES` from the target's state
+attributes and manages volume only when **both** hold:
+
+- `MediaPlayerEntityFeature.MEDIA_ANNOUNCE` is **absent**. An entity that
+  declares announce support is expected to duck and wait inside its own
+  `async_play_media`, in which case managing volume manually would fight
+  the platform instead of helping it. Against a real Cast player this is
+  always true (see above); the check exists so this integration, or a
+  future Cast release, benefits automatically once/if that changes.
+- `MediaPlayerEntityFeature.VOLUME_SET` is **present**. Cast *groups* and
+  fixed-output devices do not have a settable volume, and calling
+  `media_player.volume_set` on them raises.
+
+Volume management is a convenience, never a precondition: a `volume_set`
+that fails anyway (a transient error, a player that lies about its
+features) is logged and the message is spoken regardless.
+
+### Waiting for the announcement (`_async_wait_for_playback_end`)
+
+The wait is a heuristic, and deliberately a bounded one. It runs in two
+phases against the fingerprint recorded in step 3, watching
+`homeassistant/helpers/event.py::async_track_state_change_event`:
+
+1. **Leave**: wait until the player stops matching the fingerprint, i.e.
+   the announcement started. Capped at `ANNOUNCEMENT_START_TIMEOUT` (5s).
+2. **Return**: wait until it matches the fingerprint again, i.e. the
+   announcement ended. Capped by what remains of `PLAYBACK_TIMEOUT` (30s),
+   which bounds both phases together.
+
+Two design points, both learned the hard way:
+
+- **`state` alone is not enough.** A Cast player that was playing music is
+  `playing` before the announcement and `playing` during it. Only the media
+  identity changes, which is why `media_content_id` (a fresh
+  `media-source://tts/...` URL for every clip), `app_id` and `media_title`
+  are part of the fingerprint.
+- **Phase 1 needs its own, much shorter budget.** Home Assistant may never
+  see the transition at all -- a short clip can start and finish between
+  two state updates. With a single shared deadline, that case burned the
+  full 30s on every call. Bounding phase 1 at 5s means the worst case is
+  "restore the volume 5s later than ideal", not "block the caller for half
+  a minute". If phase 1 times out, phase 2 returns immediately: the player
+  never visibly left its previous state, so it is already back.
+
+### One announcement at a time
+
+Each `CastSpeaker` holds an `asyncio.Lock`, taken after validation and the
+deny-list check and released once the volume is restored. Without it, two
+overlapping calls both read "the previous volume" -- and the second one
+reads the *announcement* volume the first one just set, then dutifully
+"restores" it, leaving the speaker permanently quiet. Validation and the
+deny list run outside the lock so a refused call never queues behind an
+announcement in progress.
 
 ## Input contract
 
@@ -131,20 +182,52 @@ future Cast release, benefits automatically once/if that changes.
   (e.g. `alarm_control_panel.home`). Never spoken; used only to enforce
   `deny_domains`.
 
+`data` is validated by `SPEAK_DATA_SCHEMA` (`speaker.py`) before any of it
+is read: `source_entity` must be an entity id, `volume` a float in
+`[0, 1]`, `tts_entity` an entity id in the `tts` domain, `language` a
+string, `voice` a string or a mapping. Anything else raises
+`CastNotifierInvalidData` (a `HomeAssistantError`) and nothing is spoken --
+a malformed automation gets a message naming the problem instead of an
+`AttributeError` from somewhere inside the speaking path. Unknown keys are
+allowed through and ignored, so a `data` payload shared with another
+notifier does not break this one.
+
 The `NotifyEntity` surface has no `data` payload (`NotifyEntityFeature`
 does not define one), so per-call overrides and `deny_domains` enforcement
 are only reachable through the legacy service today.
 
-## The security rule: `deny_domains`
+Failures reach the caller. `notify.py::_async_speak` swallows exactly one
+thing -- a `deny_domains` refusal, which is a policy decision, not a bug --
+and logs it. Everything else surfaces as a `HomeAssistantError` once
+`CastSpeaker` has restored any volume it changed, because an automation
+that believes it spoke when it did not is worse than a red error in the
+trace.
 
-`deny_domains` defaults to `alarm_control_panel` and `lock`. When
-`data.source_entity`'s domain is in that list, the message is refused
-(logged as a warning, `CastNotifierRefused` raised internally) before it
-ever reaches `tts.speak`. This is a deliberate, hardcoded-by-default
-safety rule: alarm and lock state should never be inferable from what a
-speaker says out loud, even if someone accidentally wires an automation
-that way. `deny_domains` is configurable (options flow) so a deployment can
-extend it, but the two defaults are the whole reason this exists.
+## The deny list: an opt-in safety net
+
+`deny_domains` defaults to `alarm_control_panel` and `lock`. When a call
+carries `data.source_entity` and that entity's domain is in the list, the
+message is refused (logged as a warning, `CastNotifierRefused` raised
+internally) before it ever reaches `tts.speak`. Matching is
+case-insensitive on both sides (`casefold()` at parse time in the config
+flow and again at comparison time, so an entry stored before that
+normalization still behaves).
+
+**Its scope is exactly the `data.source_entity` a caller chose to
+declare.** It is a safety net, not a guarantee, and per project doctrine
+ADR-010 it is documented as one:
+
+- it never inspects the message text, so a message *about* the alarm that
+  does not declare `source_entity` is spoken;
+- it is unreachable from the `NotifyEntity` surface, which has no `data`;
+- it is not a boundary against anyone who can already call services on the
+  instance.
+
+What it *is* good for: making "never announce the alarm" a setting that an
+automation opts into by naming its subject, so a wiring mistake in one
+automation is caught by configuration rather than by review. The two
+defaults are the whole reason it exists; the options flow lets a deployment
+extend the list.
 
 ## Why both a legacy service and an entity
 
@@ -159,6 +242,60 @@ name. The `NotifyEntity` is the forward-looking surface. Both share one
 `CastSpeaker` instance stored on `entry.runtime_data`, so behavior never
 diverges between them.
 
+### Retracting the legacy service on unload
+
+Home Assistant does **not** clean up a legacy notify service when a config
+entry unloads. `notify/legacy.py::async_reset_platform` -- the only code
+that calls `BaseNotificationService.async_unregister_services` and drops
+the instance from `hass.data[NOTIFY_SERVICES]` -- is reached from
+`homeassistant/helpers/reload.py` alone, i.e. from a YAML reload. Nothing
+in `config_entries.py` goes near it.
+
+So `async_setup_entry` registers an `entry.async_on_unload` callback that
+does it by hand: `hass.services.async_remove("notify", "cast_<name>")`,
+then removes this entry's `CastNotificationService` from
+`hass.data[NOTIFY_SERVICES]["cast_notifier"]` (deleting the key when the
+last one goes). Two bugs fall out of not doing this:
+
+- deleting an entry left a `notify.cast_<name>` bound to a dead speaker;
+- **no options change ever took effect on the legacy service**, because
+  `async_register_services` starts with
+  `if self.hass.services.has_service(DOMAIN, self._service_name): return`.
+  The reload re-ran `async_get_service` and built a fresh
+  `CastNotificationService`, and the early return threw it away in favour
+  of the stale one. Retracting the service on unload is what makes the
+  reload effective.
+
+## Entities, devices and naming
+
+Each config entry registers one service device (`DeviceInfo` with
+`identifiers={(DOMAIN, entry.entry_id)}`, `DeviceEntryType.SERVICE`) named
+after the entry -- which the config flow titles after the Cast player. The
+`NotifyEntity` sets `_attr_has_entity_name = True` and `_attr_name = None`,
+so it inherits the device's name and lands on `notify.<player name>`. It
+also carries `_attr_translation_key = "cast_notifier"`, resolved from the
+`entity` section of `strings.json`.
+
+Before that, every entry hard-coded `_attr_name = "Cast Notifier"` and no
+device at all: a second entry produced a second entity with the same
+friendly name, colliding on `notify.cast_notifier` and indistinguishable in
+the UI.
+
+## Config entry versioning
+
+`VERSION = 1`, `MINOR_VERSION = 1`, and `async_migrate_entry` exists as a
+no-op returning `True`. There is nothing to migrate yet; the point is that
+the first schema change ships as a migration instead of as an entry Home
+Assistant refuses to load.
+
+## `integration_type` and `iot_class`
+
+`helper` and `calculated`. Cast Notifier owns no device and no connection:
+it is a wrapper around service calls to entities Home Assistant already
+has. It was declared `device`/`local_push` at first, which was wrong on
+both counts -- the "device" is someone else's, and nothing is pushed to
+this integration by anything.
+
 ## Config entry model
 
 One config entry = one Cast player. `entry.data` holds only
@@ -167,9 +304,16 @@ One config entry = one Cast player. `entry.data` holds only
 twice). Everything else -- `tts_entity`, `language`, `voice`, `volume`,
 `restore_volume`, `announce_prefix`, `deny_domains` -- lives in
 `entry.options` and is editable through the options flow without deleting
-and re-adding the entry. Changing options reloads the entry (like
-`notify-switchboard` does), which re-registers the legacy service and
-rebuilds the `CastSpeaker` with the new settings.
+and re-adding the entry. Changing options reloads the entry, which
+retracts and re-registers the legacy service (see above) and rebuilds the
+`CastSpeaker` with the new settings.
+
+Known limitation: the unique ID is the `media_player` **entity id**, not
+its entity registry id. Renaming the player's entity id therefore orphans
+the entry rather than following the rename. The registry id would fix that,
+but the picked entity is not guaranteed to be registered at all (a template
+or YAML `media_player` is not), so the entity id stays the identity. Rename
+the player before configuring it, or delete and re-add the entry.
 
 ## What this is not
 

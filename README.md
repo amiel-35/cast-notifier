@@ -38,13 +38,18 @@ has a default and can be changed later from the integration's options:
 |---|---|---|
 | `language` | engine default | Language code passed to `tts.speak`. |
 | `voice` | none | Voice name, or a JSON object of `tts.speak` options. |
-| `volume` | none | If set, volume is set to this level before speaking and restored after. |
+| `volume` | none | If set, volume is set to this level before speaking and restored after. Ignored on a player that does not support `volume_set` (Cast groups, fixed-output devices): the message is still spoken. |
 | `restore_volume` | on | Restore the previous volume once the message is done. |
 | `announce_prefix` | none | Text spoken before every message, e.g. "Attention." |
-| `deny_domains` | `alarm_control_panel, lock` | Entity domains that are never spoken about. |
+| `deny_domains` | `alarm_control_panel, lock` | Entity domains a call may not declare as its `data.source_entity`. Case-insensitive. See [the deny list](#the-deny-list-a-safety-net-not-a-guarantee). |
 
 This creates `notify.cast_<player>`, e.g. `notify.cast_kitchen` for
-`media_player.kitchen`.
+`media_player.kitchen`, plus a device and a `notify.<player>` entity per
+entry.
+
+Changing any option reloads the entry, which re-registers
+`notify.cast_<player>` against the new settings: the change takes effect on
+the very next call, with no restart.
 
 ## Examples
 
@@ -78,17 +83,48 @@ automation:
             source_entity: binary_sensor.washing_machine_done
 ```
 
-`data.source_entity` is optional and does no harm here (`binary_sensor` is
-not in `deny_domains`), but it is what enforces the security rule: sending
-`data.source_entity: alarm_control_panel.home` refuses the message instead
-of speaking it, so alarm or lock state can never leak out through a
-speaker.
+Every other `data` key is validated before anything is spoken: a bad
+`volume`, a `tts_entity` that is not a `tts.*` entity, a non-string
+`source_entity` and so on are refused with a clear error instead of failing
+somewhere inside the speaking path.
+
+## The deny list: a safety net, not a guarantee
+
+`deny_domains` refuses a call **whose `data.source_entity` names an entity
+in one of those domains**. That is the whole of its contract. It is an
+opt-in safety net for automations that declare what they are talking about
+-- a way to make "never announce the alarm" a setting rather than a code
+review -- and it follows the project doctrine ADR-010: a guard belongs
+where the caller can state its intent, and must not pretend to cover what
+it cannot see.
+
+What it therefore does **not** do:
+
+- it never inspects the message text, so
+  `notify.cast_kitchen: {message: "The alarm is armed"}` with no
+  `data.source_entity` is spoken normally;
+- it is unreachable from the `NotifyEntity` surface, which has no `data`
+  payload at all (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md));
+- it is not a security boundary against someone who can already call
+  services on your Home Assistant instance.
+
+Treat it as a seatbelt for your own automations, not as a lock. Domain
+matching is case-insensitive.
 
 ## Removal
 
 Settings -> Devices & services -> Cast Notifier -> delete, for each
-configured player. This removes its `notify.cast_<name>` service and its
-entity; it does not touch the Cast player or the `tts.*` entity it used.
+configured player. This removes its `notify.cast_<name>` service, its
+device and its entity; it does not touch the Cast player or the `tts.*`
+entity it used. Unloading or disabling the entry retracts the service the
+same way.
+
+## Translations
+
+English and French are maintained by hand. **Spanish (`es`) is machine
+translated** and has not been reviewed by a native speaker --
+[corrections are very welcome](https://github.com/amiel-35/cast-notifier/issues),
+as are new languages.
 
 ## License
 
