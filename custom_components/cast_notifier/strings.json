@@ -19,7 +19,7 @@
           "media_player": "The Cast (or other) media_player entity that will speak.",
           "tts_entity": "The tts.* entity used to generate speech, e.g. tts.home_assistant_cloud.",
           "language": "Optional language code passed to tts.speak, e.g. en-US. Leave empty to use the engine's default.",
-          "voice": "Optional voice name, or a JSON object of tts.speak options, e.g. {\"voice\": \"fr-FR-Standard-A\"}.",
+          "voice": "Optional voice name, or a JSON object of tts.speak options.",
           "volume": "If set, the player's volume is set to this level before speaking and restored afterwards.",
           "restore_volume": "Restore the volume the player had before speaking, once the message is done.",
           "announce_prefix": "Optional text spoken before every message, e.g. \"Attention.\"",
@@ -48,7 +48,7 @@
         "data_description": {
           "tts_entity": "The tts.* entity used to generate speech, e.g. tts.home_assistant_cloud.",
           "language": "Optional language code passed to tts.speak, e.g. en-US. Leave empty to use the engine's default.",
-          "voice": "Optional voice name, or a JSON object of tts.speak options, e.g. {\"voice\": \"fr-FR-Standard-A\"}.",
+          "voice": "Optional voice name, or a JSON object of tts.speak options.",
           "volume": "If set, the player's volume is set to this level before speaking and restored afterwards.",
           "restore_volume": "Restore the volume the player had before speaking, once the message is done.",
           "announce_prefix": "Optional text spoken before every message, e.g. \"Attention.\"",

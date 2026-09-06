@@ -19,7 +19,7 @@
           "media_player": "La entidad media_player (Cast u otra) que hablará.",
           "tts_entity": "La entidad tts.* usada para generar la voz, por ejemplo tts.home_assistant_cloud.",
           "language": "Código de idioma opcional pasado a tts.speak, por ejemplo es-ES. Déjalo vacío para usar el idioma predeterminado del motor.",
-          "voice": "Nombre de voz opcional, o un objeto JSON de opciones de tts.speak, por ejemplo {\"voice\": \"es-ES-Standard-A\"}.",
+          "voice": "Nombre de voz opcional, o un objeto JSON de opciones de tts.speak.",
           "volume": "Si se define, el volumen del altavoz se ajusta a este nivel antes de hablar y se restaura después.",
           "restore_volume": "Restaurar el volumen que tenía el altavoz antes de hablar, una vez terminado el mensaje.",
           "announce_prefix": "Texto opcional pronunciado antes de cada mensaje, por ejemplo «Atención.»",
@@ -48,7 +48,7 @@
         "data_description": {
           "tts_entity": "La entidad tts.* usada para generar la voz, por ejemplo tts.home_assistant_cloud.",
           "language": "Código de idioma opcional pasado a tts.speak, por ejemplo es-ES. Déjalo vacío para usar el idioma predeterminado del motor.",
-          "voice": "Nombre de voz opcional, o un objeto JSON de opciones de tts.speak, por ejemplo {\"voice\": \"es-ES-Standard-A\"}.",
+          "voice": "Nombre de voz opcional, o un objeto JSON de opciones de tts.speak.",
           "volume": "Si se define, el volumen del altavoz se ajusta a este nivel antes de hablar y se restaura después.",
           "restore_volume": "Restaurar el volumen que tenía el altavoz antes de hablar, una vez terminado el mensaje.",
           "announce_prefix": "Texto opcional pronunciado antes de cada mensaje, por ejemplo «Atención.»",
