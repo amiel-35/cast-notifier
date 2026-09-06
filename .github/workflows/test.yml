@@ -29,9 +29,16 @@ jobs:
       - name: Install dev dependencies
         run: pip install -r requirements_dev.txt
 
+      # `pytest-homeassistant-custom-component` is generated per Home
+      # Assistant release, so upgrading `homeassistant` alone leaves the
+      # test harness pinned to the previous version and the leg fails on
+      # unrelated fixture drift. Upgrade both, pre-releases included.
       - name: Install latest Home Assistant (dev matrix leg)
         if: matrix.pre
-        run: pip install --pre --upgrade homeassistant
+        run: |
+          pip install --pre --upgrade \
+            homeassistant \
+            pytest-homeassistant-custom-component
 
       - name: Run tests with coverage
         run: pytest --cov=custom_components.cast_notifier --cov-report=xml
