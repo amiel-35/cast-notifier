@@ -47,3 +47,30 @@ async def test_diagnostics_report_entry_and_speaker_config(
     assert diagnostics["speaker_config"]["media_player"] == MEDIA_PLAYER
     assert diagnostics["speaker_config"]["volume"] == 0.5
     assert diagnostics["service_name"] == "cast_kitchen"
+
+
+async def test_diagnostics_survive_an_unloaded_entry(hass: HomeAssistant) -> None:
+    """Diagnostics still work when `runtime_data` is not there.
+
+    Diagnostics can be downloaded for an entry that failed to set up; the
+    old implementation raised `AttributeError` in that case.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MEDIA_PLAYER,
+        data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
+        options={
+            CONF_TTS_ENTITY: "tts.demo",
+            CONF_RESTORE_VOLUME: True,
+            CONF_VOLUME: 0.5,
+            CONF_DENY_DOMAINS: ["alarm_control_panel", "lock"],
+        },
+    )
+    entry.add_to_hass(hass)
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert diagnostics["loaded"] is False
+    assert diagnostics["speaker_config"] is None
+    assert diagnostics["service_name"] is None
+    assert diagnostics["data"] == {CONF_MEDIA_PLAYER: MEDIA_PLAYER}
