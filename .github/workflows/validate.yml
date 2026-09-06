@@ -22,6 +22,3 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # Brand assets are submitted to home-assistant/brands separately;
-          # until then the check is ignored.
-          ignore: brands
