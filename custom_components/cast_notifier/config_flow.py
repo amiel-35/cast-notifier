@@ -47,8 +47,13 @@ def _deny_domains_to_string(domains: list[str]) -> str:
 
 
 def _string_to_deny_domains(value: str) -> list[str]:
-    """Parse a comma-separated string into a list of domains."""
-    return [part.strip() for part in value.split(",") if part.strip()]
+    """Parse a comma-separated string into a list of domains.
+
+    Domains are case-folded here so `Lock` and `lock` are the same rule;
+    `CastSpeaker` folds again when comparing, so an entry stored before
+    this normalization still behaves.
+    """
+    return [part.strip().casefold() for part in value.split(",") if part.strip()]
 
 
 def _has_cast_media_players(hass: HomeAssistant) -> bool:
@@ -68,13 +73,24 @@ def _media_player_selector(hass: HomeAssistant) -> selector.EntitySelector:
     return selector.EntitySelector(config)
 
 
+def _tts_entity_key(defaults: dict[str, Any]) -> vol.Marker:
+    """Build the `tts_entity` schema key.
+
+    A `vol.Required` with `default=None` is not a required field at all --
+    voluptuous fills the `None` in and the form validates empty -- so the
+    default is only attached when there actually is one to prefill (the
+    options flow re-showing the current engine).
+    """
+    if (current := defaults.get(CONF_TTS_ENTITY)) is not None:
+        return vol.Required(CONF_TTS_ENTITY, default=current)
+    return vol.Required(CONF_TTS_ENTITY)
+
+
 def _options_schema(hass: HomeAssistant, defaults: dict[str, Any]) -> vol.Schema:
     """Build the schema shared by the user step and the options flow."""
     return vol.Schema(
         {
-            vol.Required(
-                CONF_TTS_ENTITY, default=defaults.get(CONF_TTS_ENTITY)
-            ): selector.EntitySelector(
+            _tts_entity_key(defaults): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=TTS_DOMAIN)
             ),
             vol.Optional(
@@ -130,6 +146,7 @@ class CastNotifierConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Cast Notifier."""
 
     VERSION = 1
+    MINOR_VERSION = 1
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -138,6 +155,15 @@ class CastNotifierConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             media_player = user_input[CONF_MEDIA_PLAYER]
+            # Known limitation: the unique ID is the media_player *entity
+            # id*, not its entity registry id. Renaming the player's entity
+            # id therefore orphans the entry (it keeps pointing at the old
+            # id) instead of following the rename, and re-adding the player
+            # under its new id is possible. The registry id would fix that,
+            # but the picked entity is not guaranteed to be in the registry
+            # at all (a template or YAML media_player is not), so the entity
+            # id stays the identity; rename the player before configuring
+            # it, or delete and re-add the entry afterwards.
             await self.async_set_unique_id(media_player)
             self._abort_if_unique_id_configured()
 

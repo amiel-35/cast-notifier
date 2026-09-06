@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.cast_notifier.const import (
     CONF_DENY_DOMAINS,
@@ -123,3 +124,21 @@ async def test_options_flow_updates_settings(hass: HomeAssistant) -> None:
         "lock",
         "person",
     ]
+
+
+async def test_selector_is_filtered_to_cast_when_a_cast_player_exists(
+    hass: HomeAssistant,
+) -> None:
+    """The media_player picker narrows to the `cast` integration when it can."""
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "media_player", "cast", "kitchen-uuid", suggested_object_id="kitchen"
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    schema = result["data_schema"].schema
+    media_player_selector = schema[CONF_MEDIA_PLAYER]
+    assert media_player_selector.config["integration"] == "cast"

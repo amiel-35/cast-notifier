@@ -18,11 +18,16 @@ Both surfaces share the same `CastSpeaker` instance stored on
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from homeassistant.components.notify.const import DOMAIN as NOTIFY_DOMAIN
+from homeassistant.components.notify.legacy import (
+    NOTIFY_SERVICES,
+    BaseNotificationService,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import discovery
 
 from .const import (
@@ -49,6 +54,9 @@ class CastNotifierRuntimeData:
 
     speaker: CastSpeaker
     service_name: str
+    # Set by notify.py's `async_get_service` once the legacy service has
+    # actually been created, so unload knows which instance to retract.
+    legacy_service: BaseNotificationService | None = field(default=None)
 
 
 type CastNotifierConfigEntry = ConfigEntry[CastNotifierRuntimeData]
@@ -77,7 +85,10 @@ def _build_speaker_config(entry: CastNotifierConfigEntry) -> CastSpeakerConfig:
         volume=options.get(CONF_VOLUME),
         restore_volume=options.get(CONF_RESTORE_VOLUME, DEFAULT_RESTORE_VOLUME),
         announce_prefix=options.get(CONF_ANNOUNCE_PREFIX),
-        deny_domains=list(options.get(CONF_DENY_DOMAINS, DEFAULT_DENY_DOMAINS)),
+        deny_domains=[
+            domain.casefold()
+            for domain in options.get(CONF_DENY_DOMAINS, DEFAULT_DENY_DOMAINS)
+        ],
     )
 
 
@@ -87,11 +98,34 @@ async def async_setup_entry(
     """Set up Cast Notifier from a config entry."""
     speaker = CastSpeaker(hass, _build_speaker_config(entry))
     service_name = _service_name(entry.data[CONF_MEDIA_PLAYER])
-    entry.runtime_data = CastNotifierRuntimeData(
-        speaker=speaker, service_name=service_name
-    )
+    runtime_data = CastNotifierRuntimeData(speaker=speaker, service_name=service_name)
+    entry.runtime_data = runtime_data
 
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
+
+    @callback
+    def _async_retract_legacy_service() -> None:
+        """Remove the legacy `notify.cast_<name>` service on unload.
+
+        Home Assistant never does this for us: `notify/legacy.py` only
+        unregisters legacy services from `async_reset_platform`, which is
+        called from `homeassistant/helpers/reload.py` for YAML reloads --
+        never from a config entry unload. Without this, deleting an entry
+        leaves a dangling `notify.cast_<name>` that calls into a dead
+        speaker, and re-adding or reconfiguring it is a no-op because
+        `BaseNotificationService.async_register_services` returns early
+        when `hass.services.has_service(...)` is already true.
+        """
+        hass.services.async_remove(NOTIFY_DOMAIN, service_name)
+        services = hass.data.get(NOTIFY_SERVICES, {}).get(DOMAIN)
+        instance = runtime_data.legacy_service
+        if services is not None and instance is not None and instance in services:
+            services.remove(instance)
+            if not services:
+                del hass.data[NOTIFY_SERVICES][DOMAIN]
+        runtime_data.legacy_service = None
+
+    entry.async_on_unload(_async_retract_legacy_service)
 
     # Legacy `notify.cast_<name>` service, discovered like `mobile_app` does
     # for its own per-device services. `CONF_NAME` is what the legacy notify
@@ -117,12 +151,36 @@ async def async_setup_entry(
 async def async_unload_entry(
     hass: HomeAssistant, entry: CastNotifierConfigEntry
 ) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry.
+
+    The legacy service is retracted by the `entry.async_on_unload` callback
+    registered in `async_setup_entry`, which Home Assistant runs once this
+    returns `True`.
+    """
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: CastNotifierConfigEntry
+) -> bool:
+    """Migrate an old config entry.
+
+    Nothing to do yet: the entry format has not changed since the first
+    release (`VERSION` 1, `MINOR_VERSION` 1). This exists so that the first
+    schema change ships as a migration instead of as a broken entry, and so
+    the shape of that future migration is already decided.
+    """
+    return True
 
 
 async def _async_update_options(
     hass: HomeAssistant, entry: CastNotifierConfigEntry
 ) -> None:
-    """Reload the entry when options change."""
+    """Reload the entry when options change.
+
+    The reload is what makes an options change take effect on the legacy
+    service too: unloading retracts `notify.cast_<name>`, so setting up
+    again registers it afresh against a `CastSpeaker` built from the new
+    options (see `_async_retract_legacy_service`).
+    """
     await hass.config_entries.async_reload(entry.entry_id)
