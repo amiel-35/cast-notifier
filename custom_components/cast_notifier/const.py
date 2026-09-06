@@ -38,7 +38,15 @@ ATTR_TTS_ENTITY: Final = "tts_entity"
 # never spoken and never forwarded to `tts.speak`.
 ATTR_SOURCE_ENTITY: Final = "source_entity"
 
-# How long Cast Notifier waits for a player to report it is done speaking
-# (state returns to what it was before the announcement) before giving up
-# and restoring the volume anyway.
+# How long Cast Notifier waits, in total, for a player to report it is done
+# speaking (it looks the way it did before the announcement again) before
+# giving up and restoring the volume anyway.
 PLAYBACK_TIMEOUT: Final = 30
+
+# How long Cast Notifier waits for the announcement to *start* -- i.e. for
+# the player to stop looking the way it did before the call -- before
+# concluding it will never see that transition and skipping straight to
+# restoring the volume. Bounded separately from, and much shorter than,
+# `PLAYBACK_TIMEOUT`: a player that was already playing music may never
+# produce an observable change, and a caller must not hang 30s for that.
+ANNOUNCEMENT_START_TIMEOUT: Final = 5

@@ -19,10 +19,15 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.components.media_player.const import (
+    ATTR_APP_ID,
+    ATTR_MEDIA_CONTENT_ID,
+    ATTR_MEDIA_TITLE,
     ATTR_MEDIA_VOLUME_LEVEL,
     DOMAIN as MEDIA_PLAYER_DOMAIN,
     MediaPlayerEntityFeature,
@@ -34,9 +39,11 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
+    ANNOUNCEMENT_START_TIMEOUT,
     ATTR_LANGUAGE as DATA_LANGUAGE,
     ATTR_SOURCE_ENTITY,
     ATTR_TTS_ENTITY as DATA_TTS_ENTITY,
@@ -57,8 +64,42 @@ ATTR_LANGUAGE = "language"
 ATTR_OPTIONS = "options"
 
 
+def _entity_id_in_domain(domain: str) -> Callable[[Any], str]:
+    """Return a validator for an entity id belonging to `domain`."""
+
+    def validate(value: Any) -> str:
+        entity_id: str = cv.entity_id(value)
+        if entity_id.split(".", 1)[0] != domain:
+            raise vol.Invalid(f"Expected an entity of domain {domain!r}, got {value!r}")
+        return entity_id
+
+    return validate
+
+
+# The `data` payload accepted by `notify.cast_<name>`. Validated before
+# anything is read out of it, so a malformed automation gets a clear
+# `CastNotifierInvalidData` (a `HomeAssistantError`) instead of a
+# `TypeError`/`AttributeError` deep inside the speaking path. Unknown keys
+# are allowed through: they are simply ignored, so a payload shared with
+# another notifier does not break Cast Notifier.
+SPEAK_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_SOURCE_ENTITY): cv.entity_id,
+        vol.Optional(DATA_VOLUME): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+        vol.Optional(DATA_TTS_ENTITY): _entity_id_in_domain(TTS_DOMAIN),
+        vol.Optional(DATA_LANGUAGE): cv.string,
+        vol.Optional(DATA_VOICE): vol.Any(cv.string, dict),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+
 class CastNotifierRefused(HomeAssistantError):
     """Raised when a message is refused by the `deny_domains` rule."""
+
+
+class CastNotifierInvalidData(HomeAssistantError):
+    """Raised when a call's `data` payload does not match the contract."""
 
 
 @dataclass(slots=True)
@@ -83,20 +124,29 @@ class CastSpeakerConfig:
     deny_domains: list[str] = field(default_factory=list)
 
 
-def _build_options(voice: str | None) -> dict[str, Any] | None:
+def _build_options(voice: str | dict[str, Any] | None) -> dict[str, Any] | None:
     """Build the `options` dict passed to `tts.speak`.
 
     A plain string is a convenience for the common case (a voice name); a
-    JSON object string lets a call fully control the options dict passed to
-    `tts.speak`, e.g. `{"voice": "fr-FR-Standard-A", "gender": "female"}`.
+    JSON object string, or a real mapping in a `data.voice` payload, lets a
+    call fully control the options dict passed to `tts.speak`, e.g.
+    `{"voice": "fr-FR-Standard-A", "gender": "female"}`.
     """
     if not voice:
         return None
+    if isinstance(voice, dict):
+        return dict(voice)
     try:
         parsed = json.loads(voice)
     except ValueError:
         return {"voice": voice}
     return parsed if isinstance(parsed, dict) else {"voice": voice}
+
+
+# What Cast Notifier compares to decide whether an announcement is under
+# way. See `_async_wait_for_playback_end` for why `state` alone is not
+# enough.
+_Fingerprint = tuple[str | None, ...]
 
 
 class CastSpeaker:
@@ -110,21 +160,37 @@ class CastSpeaker:
         """Initialize the speaker."""
         self.hass = hass
         self.config = config
+        # Announcements on one player are serialized: two overlapping calls
+        # would otherwise both read "the previous volume" *after* the first
+        # one already lowered it, and the second one would restore the
+        # announcement volume as if it were the user's setting.
+        self._lock = asyncio.Lock()
 
     async def async_speak(self, request: SpeakRequest) -> None:
         """Speak `request.message`, refusing it if `deny_domains` applies.
 
-        Raises `CastNotifierRefused` if `request.data["source_entity"]`
-        belongs to a domain in `deny_domains` -- the message is never sent
-        to `tts.speak` in that case.
+        Raises `CastNotifierInvalidData` if `request.data` does not match
+        `SPEAK_DATA_SCHEMA`, and `CastNotifierRefused` if
+        `request.data["source_entity"]` belongs to a domain in
+        `deny_domains` -- the message is never sent to `tts.speak` in
+        either case. Both checks run before the per-player lock, so a
+        refused call never queues behind an announcement in progress.
         """
-        self._enforce_deny_domains(request)
+        data = self._validated_data(request)
+        self._enforce_deny_domains(data)
 
+        async with self._lock:
+            await self._async_speak_locked(request, data)
+
+    async def _async_speak_locked(
+        self, request: SpeakRequest, data: dict[str, Any]
+    ) -> None:
+        """Speak one message; called with `self._lock` held."""
         message = self._effective_message(request)
-        tts_entity = request.data.get(DATA_TTS_ENTITY) or self.config.tts_entity
-        language = request.data.get(DATA_LANGUAGE) or self.config.language
-        voice = request.data.get(DATA_VOICE) or self.config.voice
-        volume: float | None = request.data.get(DATA_VOLUME)
+        tts_entity = data.get(DATA_TTS_ENTITY) or self.config.tts_entity
+        language = data.get(DATA_LANGUAGE) or self.config.language
+        voice = data.get(DATA_VOICE) or self.config.voice
+        volume: float | None = data.get(DATA_VOLUME)
         if volume is None:
             volume = self.config.volume
 
@@ -138,29 +204,61 @@ class CastSpeaker:
         # `volume is not None` against a real Cast player today; the check
         # is kept so a media_player of another platform reusing this
         # integration benefits from native ducking/resume automatically.
-        manage_volume = volume is not None and not self._supports_announce()
+        # A player that cannot set its volume at all (a Cast *group*, a
+        # fixed-output device) is left alone entirely: speaking matters
+        # more than the volume it is spoken at.
+        manage_volume = (
+            volume is not None
+            and not self._has_feature(MediaPlayerEntityFeature.MEDIA_ANNOUNCE)
+            and self._has_feature(MediaPlayerEntityFeature.VOLUME_SET)
+        )
 
         previous_volume: float | None = None
-        previous_state: str | None = None
+        previous_fingerprint: _Fingerprint | None = None
         if manage_volume and volume is not None:
             previous_volume = self._current_volume()
-            await self._async_set_volume(volume)
-            previous_state = self._current_state()
+            if await self._async_set_volume(volume):
+                previous_fingerprint = self._fingerprint()
+            else:
+                # The volume could not be changed; there is nothing to
+                # restore and nothing to wait for, so just speak.
+                manage_volume = False
 
-        await self._async_call_speak(tts_entity, message, language, voice)
+        # Whatever happens to `tts.speak` -- an unavailable TTS entity, a
+        # dead player, a cancelled call -- the volume this integration
+        # changed is put back. Leaving a speaker permanently quiet (or
+        # permanently loud) because a message failed is the worst possible
+        # failure mode for a notifier.
+        spoke = False
+        try:
+            await self._async_call_speak(tts_entity, message, language, voice)
+            spoke = True
+        finally:
+            if manage_volume:
+                if spoke and previous_fingerprint is not None:
+                    await self._async_wait_for_playback_end(previous_fingerprint)
+                if self.config.restore_volume and previous_volume is not None:
+                    await self._async_set_volume(previous_volume)
 
-        if manage_volume:
-            if previous_state is not None:
-                await self._async_wait_for_playback_end(previous_state)
-            if self.config.restore_volume and previous_volume is not None:
-                await self._async_set_volume(previous_volume)
+    def _validated_data(self, request: SpeakRequest) -> dict[str, Any]:
+        try:
+            validated: dict[str, Any] = SPEAK_DATA_SCHEMA(request.data)
+        except vol.Invalid as err:
+            raise CastNotifierInvalidData(
+                f"Invalid `data` payload for {self.config.media_player}: {err}"
+            ) from err
+        return validated
 
-    def _enforce_deny_domains(self, request: SpeakRequest) -> None:
-        source_entity = request.data.get(ATTR_SOURCE_ENTITY)
+    def _denied_domains(self) -> set[str]:
+        """Return `deny_domains` folded for case-insensitive comparison."""
+        return {domain.casefold() for domain in self.config.deny_domains}
+
+    def _enforce_deny_domains(self, data: dict[str, Any]) -> None:
+        source_entity = data.get(ATTR_SOURCE_ENTITY)
         if source_entity is None:
             return
-        domain = source_entity.split(".", 1)[0]
-        if domain in self.config.deny_domains:
+        domain = source_entity.split(".", 1)[0].casefold()
+        if domain in self._denied_domains():
             _LOGGER.warning(
                 "Refusing to speak a message about %s on %s: domain %r is "
                 "in deny_domains %s",
@@ -182,7 +280,7 @@ class CastSpeaker:
         tts_entity: str,
         message: str,
         language: str | None,
-        voice: str | None,
+        voice: str | dict[str, Any] | None,
     ) -> None:
         service_data: dict[str, Any] = {
             ATTR_ENTITY_ID: tts_entity,
@@ -200,16 +298,37 @@ class CastSpeaker:
             TTS_DOMAIN, SERVICE_SPEAK, service_data, blocking=True
         )
 
-    def _supports_announce(self) -> bool:
+    def _has_feature(self, feature: MediaPlayerEntityFeature) -> bool:
+        """Return whether the target player advertises `feature`.
+
+        A player with no state, or one that advertises no features at all,
+        counts as not supporting anything: Cast Notifier then does the
+        least intrusive thing (speak, touch nothing else).
+        """
         state = self.hass.states.get(self.config.media_player)
         if state is None:
             return False
         supported = state.attributes.get(ATTR_SUPPORTED_FEATURES, 0)
-        return bool(supported & MediaPlayerEntityFeature.MEDIA_ANNOUNCE)
+        return bool(supported & feature)
 
-    def _current_state(self) -> str | None:
+    def _fingerprint(self) -> _Fingerprint:
+        """Snapshot what the player is doing right now.
+
+        `state` alone cannot tell a TTS clip apart from the music that was
+        already playing (both are `playing`), so the media identity is
+        folded in: `media_content_id` changes for every TTS clip, and
+        `app_id`/`media_title` change on most Cast transitions too.
+        """
         state = self.hass.states.get(self.config.media_player)
-        return state.state if state is not None else None
+        if state is None:
+            return (None, None, None, None)
+        attributes = state.attributes
+        return (
+            state.state,
+            attributes.get(ATTR_MEDIA_CONTENT_ID),
+            attributes.get(ATTR_APP_ID),
+            attributes.get(ATTR_MEDIA_TITLE),
+        )
 
     def _current_volume(self) -> float | None:
         state = self.hass.states.get(self.config.media_player)
@@ -218,39 +337,76 @@ class CastSpeaker:
         volume = state.attributes.get(ATTR_MEDIA_VOLUME_LEVEL)
         return float(volume) if volume is not None else None
 
-    async def _async_set_volume(self, volume: float) -> None:
-        await self.hass.services.async_call(
-            MEDIA_PLAYER_DOMAIN,
-            MP_SERVICE_VOLUME_SET,
-            {
-                ATTR_ENTITY_ID: self.config.media_player,
-                ATTR_MEDIA_VOLUME_LEVEL: volume,
-            },
-            blocking=True,
-        )
+    async def _async_set_volume(self, volume: float) -> bool:
+        """Set the player's volume, returning whether it worked.
 
-    async def _async_wait_for_playback_end(self, previous_state: str) -> None:
+        Volume management is a convenience, never a precondition: a player
+        that refuses `volume_set` (a Cast group, a device with fixed
+        output, a transient failure) must still speak, so the failure is
+        logged and reported rather than raised.
+        """
+        try:
+            await self.hass.services.async_call(
+                MEDIA_PLAYER_DOMAIN,
+                MP_SERVICE_VOLUME_SET,
+                {
+                    ATTR_ENTITY_ID: self.config.media_player,
+                    ATTR_MEDIA_VOLUME_LEVEL: volume,
+                },
+                blocking=True,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.warning(
+                "Could not set the volume of %s to %s: %s",
+                self.config.media_player,
+                volume,
+                err,
+            )
+            return False
+        return True
+
+    async def _async_wait_for_playback_end(
+        self, previous_fingerprint: _Fingerprint
+    ) -> None:
         """Wait for the player to report it is done, or time out.
 
         `tts.speak` returns as soon as `media_player.play_media` returns,
         which for Cast is as soon as playback *starts* (see module
         docstring): it never waits for the announcement to finish. Cast
-        Notifier tracks state changes itself instead, waiting for the
-        player to leave `previous_state` and then come back to it, bounded
-        by `PLAYBACK_TIMEOUT` seconds in total so a player that never
-        settles back (e.g. it was already playing something else) cannot
-        block a call forever.
+        Notifier tracks state changes itself instead, in two bounded
+        phases:
+
+        1. wait for the player to stop looking like `previous_fingerprint`
+           (the announcement started), capped at
+           `ANNOUNCEMENT_START_TIMEOUT`. This phase is deliberately short:
+           when the player was already playing music, the change may be
+           invisible from Home Assistant, and there is no point holding the
+           caller for the full timeout to find that out.
+        2. wait for it to look like `previous_fingerprint` again (the
+           announcement ended), capped by the remaining part of
+           `PLAYBACK_TIMEOUT`.
+
+        Both phases share one overall `PLAYBACK_TIMEOUT` deadline so a
+        player that never settles back cannot block a caller forever. If
+        phase 1 times out, phase 2 returns immediately -- the player never
+        visibly left its previous state, so it is already "back".
         """
         deadline = time.monotonic() + PLAYBACK_TIMEOUT
-        await self._async_wait_until(lambda state: state != previous_state, deadline)
-        await self._async_wait_until(lambda state: state == previous_state, deadline)
+        start_deadline = min(deadline, time.monotonic() + ANNOUNCEMENT_START_TIMEOUT)
+        await self._async_wait_until(
+            lambda fingerprint: fingerprint != previous_fingerprint, start_deadline
+        )
+        await self._async_wait_until(
+            lambda fingerprint: fingerprint == previous_fingerprint, deadline
+        )
 
-    async def _async_wait_until(self, predicate: Any, deadline: float) -> None:
+    async def _async_wait_until(
+        self, predicate: Callable[[_Fingerprint], bool], deadline: float
+    ) -> None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
-        current = self._current_state()
-        if current is not None and predicate(current):
+        if predicate(self._fingerprint()):
             return
 
         done = asyncio.Event()
@@ -258,7 +414,16 @@ class CastSpeaker:
         @callback
         def _on_state_change(event: Event[EventStateChangedData]) -> None:
             new_state = event.data["new_state"]
-            if new_state is not None and predicate(new_state.state):
+            if new_state is None:
+                return
+            attributes = new_state.attributes
+            fingerprint: _Fingerprint = (
+                new_state.state,
+                attributes.get(ATTR_MEDIA_CONTENT_ID),
+                attributes.get(ATTR_APP_ID),
+                attributes.get(ATTR_MEDIA_TITLE),
+            )
+            if predicate(fingerprint):
                 done.set()
 
         unsub = async_track_state_change_event(
