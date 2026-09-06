@@ -10,15 +10,17 @@ test_notify.py).
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
 import pytest
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import async_mock_service
 
+from custom_components.cast_notifier.const import DOMAIN
 from custom_components.cast_notifier.speaker import (
     CastNotifierInvalidData,
     CastNotifierRefused,
@@ -180,14 +182,24 @@ async def test_per_call_volume_overrides_entry_volume(
     assert volume_calls[0].data["volume_level"] == 0.9
 
 
-async def test_deny_domains_refuses_without_calling_tts(hass: HomeAssistant) -> None:
-    """A message about a denied domain is refused and never spoken."""
+async def test_deny_domains_refuses_without_calling_tts(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A denied message is refused, never spoken, logged *and* raised.
+
+    ADR-015: a refusal is an error for the caller, not a silent success.
+    The WARNING stays because the log line is the operator's only trace
+    when the caller did not pass `blocking: true`.
+    """
     _set_player(hass, "idle")
     calls = async_mock_service(hass, "tts", "speak")
 
     speaker = CastSpeaker(hass, _config(deny_domains=["alarm_control_panel", "lock"]))
 
-    with pytest.raises(CastNotifierRefused):
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(CastNotifierRefused) as raised,
+    ):
         await speaker.async_speak(
             SpeakRequest(
                 message="Alarm is armed",
@@ -196,6 +208,24 @@ async def test_deny_domains_refuses_without_calling_tts(hass: HomeAssistant) -> 
         )
 
     assert len(calls) == 0
+    assert "alarm_control_panel.home" in caplog.text
+    assert raised.value.translation_domain == DOMAIN
+    assert raised.value.translation_key == "message_refused"
+    assert raised.value.translation_placeholders == {
+        "domain": "alarm_control_panel",
+        "source_entity": "alarm_control_panel.home",
+        "player": MEDIA_PLAYER,
+    }
+
+
+async def test_refusals_are_service_validation_errors(hass: HomeAssistant) -> None:
+    """Both refusal types are `ServiceValidationError`s (ADR-015).
+
+    Home Assistant renders those as their translated message, without a
+    traceback: the caller asked for something refused, nothing crashed.
+    """
+    assert issubclass(CastNotifierRefused, ServiceValidationError)
+    assert issubclass(CastNotifierInvalidData, ServiceValidationError)
 
 
 async def test_deny_domains_allows_other_domains(hass: HomeAssistant) -> None:
@@ -514,18 +544,31 @@ async def test_deny_domains_matching_is_case_insensitive(
     ],
 )
 async def test_invalid_data_is_refused_with_a_clear_error(
-    hass: HomeAssistant, data: dict[str, Any]
+    hass: HomeAssistant, data: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A malformed `data` payload raises `CastNotifierInvalidData` (I5c)."""
+    """A malformed `data` payload raises `CastNotifierInvalidData` (I5c).
+
+    Translated for the caller, logged for the operator (ADR-015).
+    """
     _set_player(hass, "idle")
     calls = async_mock_service(hass, "tts", "speak")
 
     speaker = CastSpeaker(hass, _config())
 
-    with pytest.raises(CastNotifierInvalidData):
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(CastNotifierInvalidData) as raised,
+    ):
         await speaker.async_speak(SpeakRequest(message="Hi", data=data))
 
     assert len(calls) == 0
+    assert "invalid `data` payload" in caplog.text
+    assert raised.value.translation_domain == DOMAIN
+    assert raised.value.translation_key == "invalid_data"
+    placeholders = raised.value.translation_placeholders
+    assert placeholders is not None
+    assert placeholders["player"] == MEDIA_PLAYER
+    assert placeholders["error"]
 
 
 async def test_valid_data_payload_is_accepted(hass: HomeAssistant) -> None:

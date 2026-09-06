@@ -42,9 +42,11 @@ rules:
   test-before-configure:
     status: exempt
     comment: >-
-      There is no external device or service to validate during setup: the
-      media_player and tts_entity are picked from entities Home Assistant
-      already knows about.
+      There is no external device or service to connect to during setup:
+      the media_player and tts_entity are picked from entities Home
+      Assistant already knows about. What can be checked locally is: the
+      user step refuses a media_player whose supported_features lacks
+      PLAY_MEDIA, since such a player could never speak.
   test-before-setup:
     status: exempt
     comment: Same reasoning as test-before-configure.

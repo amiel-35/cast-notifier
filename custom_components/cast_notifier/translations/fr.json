@@ -29,6 +29,9 @@
     },
     "abort": {
       "already_configured": "Cette enceinte est déjà configurée pour Cast Notifier."
+    },
+    "error": {
+      "player_cannot_play_media": "Cette enceinte ne prend pas en charge play_media : elle ne pourra jamais prononcer de message. Choisissez une enceinte Cast, ou un autre media player capable de lire un média."
     }
   },
   "options": {
@@ -57,11 +60,12 @@
       }
     }
   },
-  "entity": {
-    "notify": {
-      "cast_notifier": {
-        "name": "Cast Notifier"
-      }
+  "exceptions": {
+    "message_refused": {
+      "message": "Cast Notifier n'a pas prononcé un message concernant {source_entity} sur {player} : le domaine {domain} figure dans la liste des domaines jamais annoncés de cette enceinte."
+    },
+    "invalid_data": {
+      "message": "Cast Notifier n'a pas prononcé un message sur {player} : la charge utile data est invalide : {error}"
     }
   }
 }

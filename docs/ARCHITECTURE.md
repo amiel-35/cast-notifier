@@ -186,29 +186,42 @@ announcement in progress.
 is read: `source_entity` must be an entity id, `volume` a float in
 `[0, 1]`, `tts_entity` an entity id in the `tts` domain, `language` a
 string, `voice` a string or a mapping. Anything else raises
-`CastNotifierInvalidData` (a `HomeAssistantError`) and nothing is spoken --
-a malformed automation gets a message naming the problem instead of an
-`AttributeError` from somewhere inside the speaking path. Unknown keys are
-allowed through and ignored, so a `data` payload shared with another
-notifier does not break this one.
+`CastNotifierInvalidData` and nothing is spoken -- a malformed automation
+gets a message naming the problem instead of an `AttributeError` from
+somewhere inside the speaking path. Unknown keys are allowed through and
+ignored, so a `data` payload shared with another notifier does not break
+this one.
 
 The `NotifyEntity` surface has no `data` payload (`NotifyEntityFeature`
 does not define one), so per-call overrides and `deny_domains` enforcement
 are only reachable through the legacy service today.
 
-Failures reach the caller. `notify.py::_async_speak` swallows exactly one
-thing -- a `deny_domains` refusal, which is a policy decision, not a bug --
-and logs it. Everything else surfaces as a `HomeAssistantError` once
-`CastSpeaker` has restored any volume it changed, because an automation
-that believes it spoke when it did not is worse than a red error in the
-trace.
+### Refusals raise -- ADR-015 of the suite
+
+Every failure reaches the caller; `notify.py::_async_speak` swallows
+nothing. A `deny_domains` refusal (`CastNotifierRefused`) and a malformed
+`data` payload (`CastNotifierInvalidData`) are both
+`ServiceValidationError`s -- translated through the `exceptions` section of
+`strings.json`, so the caller sees a real message and Home Assistant shows
+it without a traceback -- raised once `CastSpeaker` has restored any volume
+it changed. A failing `tts.speak` or an unexpected error surfaces as a
+`HomeAssistantError` the same way.
+
+A refusal is *also* logged at WARNING, by `CastSpeaker` itself, before it
+is raised: the log line carries the operator-facing context (which entity,
+which player, the whole deny list) that a caller-facing message should not.
+The one thing that must never happen is the earlier behaviour -- a refusal
+logged and swallowed, answering `POST /api/services/notify/cast_kitchen`
+with a silent HTTP 200 for a message nobody ever heard. See
+[`known-issues.md`](known-issues.md) for what that double reporting costs
+under core `alert`.
 
 ## The deny list: an opt-in safety net
 
 `deny_domains` defaults to `alarm_control_panel` and `lock`. When a call
 carries `data.source_entity` and that entity's domain is in the list, the
-message is refused (logged as a warning, `CastNotifierRefused` raised
-internally) before it ever reaches `tts.speak`. Matching is
+message is refused -- logged as a warning, and `CastNotifierRefused` raised
+to the caller (see above) -- before it ever reaches `tts.speak`. Matching is
 case-insensitive on both sides (`casefold()` at parse time in the config
 flow and again at comparison time, so an entry stored before that
 normalization still behaves).
@@ -266,15 +279,48 @@ last one goes). Two bugs fall out of not doing this:
   of the stale one. Retracting the service on unload is what makes the
   reload effective.
 
+`hass.services.async_remove` by name, and not the service object's own
+`async_unregister_services()`: that method is a coroutine, and
+`entry.async_on_unload` callbacks are synchronous, so calling it would mean
+firing a task nothing waits for -- the entry could be set up again before
+the old service was gone. It also reads `self._service_name`, a private
+attribute that exists only once `async_register_services` has run, which is
+not guaranteed at unload time. The removal is guarded by
+`hass.services.has_service(...)` so an entry whose discovery never
+completed does not log "Unable to remove unknown service" on its way out.
+
+The discovery that registers the service is tied to the entry
+(`entry.async_create_task`) rather than to `hass`:
+`ConfigEntry.async_unload` awaits the entry's own tasks
+(`_async_process_on_unload`), so the discovery cannot still be running
+against an entry that no longer exists.
+
+That is not enough on its own, because the *registration* happens one hop
+further away. `discovery.async_load_platform` ends in
+`async_dispatcher_send_internal` (`helpers/dispatcher.py`), which runs a
+coroutine listener through `hass.async_run_hass_job` -- a task nobody owns
+and nothing awaits. So `notify/legacy.py::async_setup_platform` can call
+`async_get_service`, and then `async_register_services`, *after* the unload
+callback has already looked for a service that did not exist yet: the entry
+goes away and leaves a `notify.cast_<name>` bound to a dead speaker with
+nothing left to retract it. `CastNotifierRuntimeData.unloaded` closes that
+window: the unload callback sets it synchronously, and both
+`async_get_service` and `CastNotificationService.async_register_services`
+(overridden for exactly this) bail out when it is set. Core's
+`async_register_services` does not await before registering, so the check
+cannot itself be raced.
+
 ## Entities, devices and naming
 
 Each config entry registers one service device (`DeviceInfo` with
 `identifiers={(DOMAIN, entry.entry_id)}`, `DeviceEntryType.SERVICE`) named
 after the entry -- which the config flow titles after the Cast player. The
 `NotifyEntity` sets `_attr_has_entity_name = True` and `_attr_name = None`,
-so it inherits the device's name and lands on `notify.<player name>`. It
-also carries `_attr_translation_key = "cast_notifier"`, resolved from the
-`entity` section of `strings.json`.
+so it inherits the device's name and lands on `notify.<player name>`. There
+is deliberately **no** `_attr_translation_key`: a translated entity name
+would win over the device name and give every entry the same one again,
+which is the bug below. The `entity` section of `strings.json` was dropped
+with it.
 
 Before that, every entry hard-coded `_attr_name = "Cast Notifier"` and no
 device at all: a second entry produced a second entity with the same
@@ -307,6 +353,16 @@ twice). Everything else -- `tts_entity`, `language`, `voice`, `volume`,
 and re-adding the entry. Changing options reloads the entry, which
 retracts and re-registers the legacy service (see above) and rebuilds the
 `CastSpeaker` with the new settings.
+
+The user step also refuses a `media_player` whose `supported_features`
+lacks `MediaPlayerEntityFeature.PLAY_MEDIA`
+(`homeassistant/components/media_player/const.py`), with the form error
+`player_cannot_play_media`. Everything this integration does ends in
+`media_player.play_media`, so such a player can never speak: without the
+check, the entry is created happily and every announcement fails with
+`ServiceNotSupported` (as one did on the dev instance). The check is
+permissive where it cannot know: a player with no state, or with no
+`supported_features` attribute at all, is accepted.
 
 Known limitation: the unique ID is the `media_player` **entity id**, not
 its entity registry id. Renaming the player's entity id therefore orphans

@@ -38,7 +38,7 @@ from homeassistant.const import (
     SERVICE_VOLUME_SET as MP_SERVICE_VOLUME_SET,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -49,6 +49,7 @@ from .const import (
     ATTR_TTS_ENTITY as DATA_TTS_ENTITY,
     ATTR_VOICE as DATA_VOICE,
     ATTR_VOLUME as DATA_VOLUME,
+    DOMAIN,
     PLAYBACK_TIMEOUT,
 )
 
@@ -94,11 +95,19 @@ SPEAK_DATA_SCHEMA = vol.Schema(
 )
 
 
-class CastNotifierRefused(HomeAssistantError):
+# Both of these are `ServiceValidationError`s, not bare
+# `HomeAssistantError`s: the caller asked for something this integration
+# refuses to do, which is a problem with the call, not a failure inside it.
+# Home Assistant renders a `ServiceValidationError` as its translated
+# message without a traceback, and per ADR-015 of the suite both reach the
+# caller instead of being swallowed -- see docs/ARCHITECTURE.md.
+
+
+class CastNotifierRefused(ServiceValidationError):
     """Raised when a message is refused by the `deny_domains` rule."""
 
 
-class CastNotifierInvalidData(HomeAssistantError):
+class CastNotifierInvalidData(ServiceValidationError):
     """Raised when a call's `data` payload does not match the contract."""
 
 
@@ -173,8 +182,10 @@ class CastSpeaker:
         `SPEAK_DATA_SCHEMA`, and `CastNotifierRefused` if
         `request.data["source_entity"]` belongs to a domain in
         `deny_domains` -- the message is never sent to `tts.speak` in
-        either case. Both checks run before the per-player lock, so a
-        refused call never queues behind an announcement in progress.
+        either case. Both are `ServiceValidationError`s that reach the
+        caller (ADR-015) as well as the log. Both checks run before the
+        per-player lock, so a refused call never queues behind an
+        announcement in progress.
         """
         data = self._validated_data(request)
         self._enforce_deny_domains(data)
@@ -244,8 +255,22 @@ class CastSpeaker:
         try:
             validated: dict[str, Any] = SPEAK_DATA_SCHEMA(request.data)
         except vol.Invalid as err:
+            # Logged *and* raised: the caller must know nothing was spoken
+            # (ADR-015), and a call made without `blocking: true` -- core
+            # `alert` does exactly that -- would otherwise leave no trace
+            # an operator can find.
+            _LOGGER.warning(
+                "Refusing a message on %s: invalid `data` payload: %s",
+                self.config.media_player,
+                err,
+            )
             raise CastNotifierInvalidData(
-                f"Invalid `data` payload for {self.config.media_player}: {err}"
+                translation_domain=DOMAIN,
+                translation_key="invalid_data",
+                translation_placeholders={
+                    "player": self.config.media_player,
+                    "error": str(err),
+                },
             ) from err
         return validated
 
@@ -259,6 +284,10 @@ class CastSpeaker:
             return
         domain = source_entity.split(".", 1)[0].casefold()
         if domain in self._denied_domains():
+            # Logged *and* raised (ADR-015): the log line carries the full
+            # context for an operator, the exception tells the caller that
+            # nothing was spoken. A refusal that only logged would be an
+            # HTTP 200 for a message nobody ever heard.
             _LOGGER.warning(
                 "Refusing to speak a message about %s on %s: domain %r is "
                 "in deny_domains %s",
@@ -268,7 +297,13 @@ class CastSpeaker:
                 self.config.deny_domains,
             )
             raise CastNotifierRefused(
-                f"Messages about entities in domain {domain!r} are never spoken"
+                translation_domain=DOMAIN,
+                translation_key="message_refused",
+                translation_placeholders={
+                    "domain": domain,
+                    "source_entity": source_entity,
+                    "player": self.config.media_player,
+                },
             )
 
     def _effective_message(self, request: SpeakRequest) -> str:

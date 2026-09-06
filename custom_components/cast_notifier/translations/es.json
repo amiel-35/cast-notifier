@@ -29,6 +29,9 @@
     },
     "abort": {
       "already_configured": "Este altavoz ya está configurado en Cast Notifier."
+    },
+    "error": {
+      "player_cannot_play_media": "Este altavoz no admite play_media, por lo que nunca podrá hablar. Elija un altavoz Cast u otro media player capaz de reproducir medios."
     }
   },
   "options": {
@@ -57,11 +60,12 @@
       }
     }
   },
-  "entity": {
-    "notify": {
-      "cast_notifier": {
-        "name": "Cast Notifier"
-      }
+  "exceptions": {
+    "message_refused": {
+      "message": "Cast Notifier no ha pronunciado un mensaje sobre {source_entity} en {player}: el dominio {domain} está en la lista de dominios nunca anunciados de este altavoz."
+    },
+    "invalid_data": {
+      "message": "Cast Notifier no ha pronunciado un mensaje en {player}: los datos de la llamada no son válidos: {error}"
     }
   }
 }

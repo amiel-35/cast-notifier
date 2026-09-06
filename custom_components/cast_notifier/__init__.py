@@ -57,6 +57,13 @@ class CastNotifierRuntimeData:
     # Set by notify.py's `async_get_service` once the legacy service has
     # actually been created, so unload knows which instance to retract.
     legacy_service: BaseNotificationService | None = field(default=None)
+    # Set by the unload callback. The legacy platform is registered from a
+    # dispatcher callback that Home Assistant runs in a task of its own
+    # (`helpers/discovery.py` -> `async_dispatcher_send_internal`), which
+    # nothing here owns: it can still be in flight when the entry unloads,
+    # and would then re-register a service that was just retracted. See
+    # `async_get_service`.
+    unloaded: bool = field(default=False)
 
 
 type CastNotifierConfigEntry = ConfigEntry[CastNotifierRuntimeData]
@@ -115,8 +122,20 @@ async def async_setup_entry(
         speaker, and re-adding or reconfiguring it is a no-op because
         `BaseNotificationService.async_register_services` returns early
         when `hass.services.has_service(...)` is already true.
+
+        `hass.services.async_remove` rather than the service object's own
+        `async_unregister_services()`: that method is a coroutine, and an
+        `entry.async_on_unload` callback is synchronous, so calling it
+        would mean firing a task whose completion nothing waits for -- the
+        entry could be set up again before the old service is gone. It
+        also reads `self._service_name`, a private attribute that only
+        exists once `async_register_services` has run, which is not
+        guaranteed here (discovery may never have completed). Removing the
+        service by name is synchronous, and correct either way.
         """
-        hass.services.async_remove(NOTIFY_DOMAIN, service_name)
+        runtime_data.unloaded = True
+        if hass.services.has_service(NOTIFY_DOMAIN, service_name):
+            hass.services.async_remove(NOTIFY_DOMAIN, service_name)
         services = hass.data.get(NOTIFY_SERVICES, {}).get(DOMAIN)
         instance = runtime_data.legacy_service
         if services is not None and instance is not None and instance in services:
@@ -131,7 +150,13 @@ async def async_setup_entry(
     # for its own per-device services. `CONF_NAME` is what the legacy notify
     # platform slugifies into the service name (see notify/legacy.py:
     # async_setup_legacy.async_setup_platform).
-    hass.async_create_task(
+    # Tied to the entry rather than to `hass`: `ConfigEntry.async_unload`
+    # awaits the entry's own tasks (`_async_process_on_unload` in
+    # `config_entries.py`), so the discovery cannot still be running
+    # against an entry that no longer exists. A `hass.async_create_task`
+    # is owned by nobody and outlives the entry entirely.
+    entry.async_create_task(
+        hass,
         discovery.async_load_platform(
             hass,
             Platform.NOTIFY,
@@ -139,6 +164,7 @@ async def async_setup_entry(
             {CONF_NAME: service_name, "entry_id": entry.entry_id},
             {},
         ),
+        name="cast_notifier legacy notify discovery",
         eager_start=True,
     )
 

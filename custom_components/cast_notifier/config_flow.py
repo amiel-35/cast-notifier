@@ -2,7 +2,8 @@
 
 One config entry = one Cast player. The user step picks the `media_player`
 (this also sets the entry's unique ID, so the same player cannot be
-configured twice) and the `tts_entity` to speak with; everything else
+configured twice, and refuses a player that cannot play media at all --
+see `_supports_play_media`) and the `tts_entity` to speak with; everything else
 (language, voice, volume, `deny_domains`, ...) has a sensible default and
 can be changed later through the options flow, which reuses the same
 schema minus `media_player`.
@@ -13,13 +14,15 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components.media_player.const import MediaPlayerEntityFeature
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import ATTR_SUPPORTED_FEATURES
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
@@ -63,6 +66,29 @@ def _has_cast_media_players(hass: HomeAssistant) -> bool:
         entry.domain == MEDIA_PLAYER_DOMAIN and entry.platform == CAST_PLATFORM
         for entry in registry.entities.values()
     )
+
+
+def _supports_play_media(state: State) -> bool:
+    """Return whether a media_player state advertises `PLAY_MEDIA`.
+
+    Everything Cast Notifier does ends in `media_player.play_media`:
+    `tts.speak` calls it (`homeassistant/components/tts/entity.py`,
+    `TextToSpeechEntity.async_speak`), and Home Assistant refuses the call
+    with `ServiceNotSupported` when the target does not advertise
+    `MediaPlayerEntityFeature.PLAY_MEDIA`
+    (`homeassistant/components/media_player/const.py`). Such a player can
+    never speak, so picking one is worth catching in the form rather than
+    in the logs of the first announcement that matters.
+
+    Permissive when the information is missing: a player with no
+    `supported_features` attribute at all (never seen, a stub, a template
+    entity) is accepted rather than refused on the strength of an absent
+    attribute.
+    """
+    features = state.attributes.get(ATTR_SUPPORTED_FEATURES)
+    if not isinstance(features, int):
+        return True
+    return bool(features & MediaPlayerEntityFeature.PLAY_MEDIA)
 
 
 def _media_player_selector(hass: HomeAssistant) -> selector.EntitySelector:
@@ -168,19 +194,28 @@ class CastNotifierConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             state = self.hass.states.get(media_player)
-            title = state.name if state is not None else media_player
+            if state is not None and not _supports_play_media(state):
+                # A player that cannot play media cannot speak: `tts.speak`
+                # would raise `ServiceNotSupported` on every call. Refuse it
+                # here, where the user can pick another one.
+                errors[CONF_MEDIA_PLAYER] = "player_cannot_play_media"
+            else:
+                title = state.name if state is not None else media_player
 
-            return self.async_create_entry(
-                title=title,
-                data={CONF_MEDIA_PLAYER: media_player},
-                options=_parse_options(user_input),
-            )
+                return self.async_create_entry(
+                    title=title,
+                    data={CONF_MEDIA_PLAYER: media_player},
+                    options=_parse_options(user_input),
+                )
 
         schema = vol.Schema(
             {
                 vol.Required(CONF_MEDIA_PLAYER): _media_player_selector(self.hass),
             }
         ).extend(_options_schema(self.hass, {}).schema)
+        if user_input is not None:
+            # Re-showing the form after an error: keep what was typed.
+            schema = self.add_suggested_values_to_schema(schema, user_input)
 
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 

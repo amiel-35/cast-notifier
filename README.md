@@ -43,6 +43,10 @@ has a default and can be changed later from the integration's options:
 | `announce_prefix` | none | Text spoken before every message, e.g. "Attention." |
 | `deny_domains` | `alarm_control_panel, lock` | Entity domains a call may not declare as its `data.source_entity`. Case-insensitive. See [the deny list](#the-deny-list-a-safety-net-not-a-guarantee). |
 
+A player that does not support `play_media` is refused in the form: it
+could never speak, since every announcement ends in
+`media_player.play_media`.
+
 This creates `notify.cast_<player>`, e.g. `notify.cast_kitchen` for
 `media_player.kitchen`, plus a device and a `notify.<player>` entity per
 entry.
@@ -87,6 +91,40 @@ Every other `data` key is validated before anything is spoken: a bad
 `volume`, a `tts_entity` that is not a `tts.*` entity, a non-string
 `source_entity` and so on are refused with a clear error instead of failing
 somewhere inside the speaking path.
+
+## When a message is not spoken, the call fails
+
+A refusal is an error, not a silent success. A call blocked by the deny
+list, and a call with a malformed `data` payload, both raise: an automation
+or script using `blocking: true` gets the failure in its own trace, the
+error appears in the UI, and a warning is written to the log either way.
+Cast Notifier never answers "sent" for a message nobody heard.
+
+One consequence worth knowing: core's `alert` integration calls its
+notifiers without waiting for them, so a refused `alert` produces two log
+lines instead of one -- the warning, then Home Assistant's own report of
+the unhandled error. See
+[`docs/known-issues.md`](docs/known-issues.md).
+
+## Announcement while music is playing
+
+When a `volume` is configured, Cast Notifier lowers the volume, speaks, and
+waits for the player to be doing what it was doing before restoring it.
+That wait is a heuristic against the player's reported state, and it has a
+cost worth knowing about: **if the player was already playing something,
+the call can take up to 5 seconds** even for a two-word message.
+
+Home Assistant may never observe the switch to the TTS clip -- a short clip
+can start and finish between two state updates from the Cast device -- so
+Cast Notifier gives the announcement 5 seconds to become visible before
+concluding it already ended and restoring the volume
+(`ANNOUNCEMENT_START_TIMEOUT`, capped by an overall 30s
+`PLAYBACK_TIMEOUT`). The message itself is spoken immediately; it is the
+service call that returns late. A script that chains several announcements,
+or one that calls with `blocking: true` in a tight sequence, will feel it.
+
+Set no `volume` on the entry to opt out entirely: with nothing to restore,
+Cast Notifier speaks and returns straight away.
 
 ## The deny list: a safety net, not a guarantee
 

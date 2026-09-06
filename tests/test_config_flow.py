@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from homeassistant import config_entries
+from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
@@ -124,6 +125,103 @@ async def test_options_flow_updates_settings(hass: HomeAssistant) -> None:
         "lock",
         "person",
     ]
+
+
+async def test_player_without_play_media_is_refused(hass: HomeAssistant) -> None:
+    """A media_player that cannot play media cannot speak, so it is refused.
+
+    The dev instance configured a demo player advertising everything but
+    `PLAY_MEDIA`: the entry was created happily and every announcement
+    failed with `ServiceNotSupported`.
+    """
+    hass.states.async_set(
+        "media_player.kitchen",
+        "idle",
+        {
+            "friendly_name": "Kitchen",
+            "supported_features": int(
+                MediaPlayerEntityFeature.VOLUME_SET
+                | MediaPlayerEntityFeature.TURN_ON
+                | MediaPlayerEntityFeature.TURN_OFF
+            ),
+        },
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_MEDIA_PLAYER: "player_cannot_play_media"}
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+    # The form is usable again: picking a player that *can* play media
+    # from the same flow creates the entry.
+    hass.states.async_set(
+        "media_player.living_room",
+        "idle",
+        {
+            "friendly_name": "Living room",
+            "supported_features": int(MediaPlayerEntityFeature.PLAY_MEDIA),
+        },
+    )
+    retried = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {**USER_INPUT, CONF_MEDIA_PLAYER: "media_player.living_room"},
+    )
+
+    assert retried["type"] is FlowResultType.CREATE_ENTRY
+    assert retried["title"] == "Living room"
+
+
+async def test_player_with_play_media_is_accepted(hass: HomeAssistant) -> None:
+    """A player advertising PLAY_MEDIA passes the check, titled after it."""
+    hass.states.async_set(
+        "media_player.kitchen",
+        "idle",
+        {
+            "friendly_name": "Kitchen speaker",
+            "supported_features": int(
+                MediaPlayerEntityFeature.PLAY_MEDIA
+                | MediaPlayerEntityFeature.VOLUME_SET
+            ),
+        },
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Kitchen speaker"
+
+
+async def test_player_without_feature_information_is_accepted(
+    hass: HomeAssistant,
+) -> None:
+    """A player that advertises no features at all is not refused.
+
+    The check is permissive where it cannot know: refusing on an absent
+    attribute would block template players and entities seen for the
+    first time.
+    """
+    hass.states.async_set("media_player.kitchen", "idle")
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
 async def test_selector_is_filtered_to_cast_when_a_cast_player_exists(

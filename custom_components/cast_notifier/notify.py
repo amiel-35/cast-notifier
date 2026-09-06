@@ -9,14 +9,13 @@ modern automations expect:
 - `async_setup_entry` registers a `NotifyEntity` for the same config entry.
 
 Both simply build a `SpeakRequest` from the call's `message`/`data` and hand
-it to the shared `CastSpeaker`. A refusal (`deny_domains`) is logged and
-swallowed rather than raised to the caller, matching how a notify service is
-expected to behave when a message cannot be delivered: the caller (an
-`alert`, an automation) should not crash because Cast Notifier decided a
-message about an alarm should stay silent. Every *other* failure -- an
-unavailable TTS engine, a malformed `data` payload -- does surface to the
-caller as a `HomeAssistantError`, because that is a bug to fix, not a
-policy decision.
+it to the shared `CastSpeaker`. Nothing is swallowed here: per ADR-015 of
+the suite, a call that did not speak fails. A `deny_domains` refusal and a
+malformed `data` payload both reach the caller as a translated
+`ServiceValidationError` (and are logged as warnings by `CastSpeaker` on
+the way out); an unavailable TTS engine or a dead player reaches it as a
+`HomeAssistantError`. An automation that believes it spoke when it did not
+is worse than a red error in its trace.
 """
 
 from __future__ import annotations
@@ -35,25 +34,27 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import CastNotifierConfigEntry, CastNotifierRuntimeData
 from .const import DOMAIN
-from .speaker import CastNotifierRefused, CastSpeaker, SpeakRequest
+from .speaker import CastSpeaker, SpeakRequest
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _async_speak(speaker: CastSpeaker, request: SpeakRequest) -> None:
-    """Speak a request, logging (not raising) a `deny_domains` refusal.
+    """Speak a request, raising anything that stopped it from being spoken.
 
-    Anything else is raised to the caller as a `HomeAssistantError`, after
-    `CastSpeaker` has restored any volume it changed: silently swallowing a
-    failed announcement would leave an automation believing it spoke.
+    Every failure -- including a `deny_domains` refusal, which `CastSpeaker`
+    has already logged as a warning -- is raised to the caller as a
+    `HomeAssistantError` after `CastSpeaker` has restored any volume it
+    changed. Swallowing a refusal would answer an automation with a silent
+    HTTP 200 for a message nobody ever heard (ADR-015).
     """
     try:
         await speaker.async_speak(request)
-    except CastNotifierRefused as err:
-        _LOGGER.warning("Message refused: %s", err)
     except HomeAssistantError:
-        # Already a clear, caller-facing error (invalid `data`, a failing
-        # `tts.speak`, ...). Let it through untouched.
+        # Already a clear, caller-facing error: a `CastNotifierRefused` or
+        # `CastNotifierInvalidData` (both translated
+        # `ServiceValidationError`s), or a failing `tts.speak`. Let it
+        # through untouched.
         raise
     except Exception as err:
         raise HomeAssistantError(
@@ -81,7 +82,14 @@ async def async_get_service(
         return None
 
     runtime_data: CastNotifierRuntimeData = entry.runtime_data
-    service = CastNotificationService(hass, runtime_data.speaker)
+    if runtime_data.unloaded:
+        # The entry unloaded while this discovery was still in flight.
+        # Registering now would put back the `notify.cast_<name>` the
+        # unload callback just retracted, bound to a dead speaker.
+        _LOGGER.debug("Cast Notifier entry unloaded before discovery completed")
+        return None
+
+    service = CastNotificationService(hass, runtime_data)
     # Remembered so unloading the entry can drop this instance from
     # `notify.legacy`'s registry along with the service itself; core never
     # does that for a config entry (see __init__.py).
@@ -92,10 +100,34 @@ async def async_get_service(
 class CastNotificationService(BaseNotificationService):
     """Legacy notify service that speaks via the `CastSpeaker`."""
 
-    def __init__(self, hass: HomeAssistant, speaker: CastSpeaker) -> None:
+    def __init__(
+        self, hass: HomeAssistant, runtime_data: CastNotifierRuntimeData
+    ) -> None:
         """Initialize the service."""
         self.hass = hass
-        self._speaker = speaker
+        self._runtime_data = runtime_data
+        self._speaker = runtime_data.speaker
+
+    async def async_register_services(self) -> None:
+        """Register `notify.cast_<name>`, unless the entry has unloaded.
+
+        This platform is set up from a task Home Assistant owns -- the
+        discovery dispatcher runs its listener as a task of its own
+        (`helpers/dispatcher.py::async_dispatcher_send_internal`) -- so an
+        entry can unload between `async_get_service` returning this
+        instance and this method being reached. The unload callback in
+        __init__.py has then already looked for a service that did not
+        exist yet, and registering now would leave a `notify.cast_<name>`
+        bound to a dead speaker with nothing left to retract it.
+
+        `CastNotifierRuntimeData.unloaded` is set synchronously by that
+        callback, and core's `async_register_services` does not await
+        before registering, so this check cannot itself be raced.
+        """
+        if self._runtime_data.unloaded:
+            _LOGGER.debug("Cast Notifier entry unloaded before its service registered")
+            return
+        await super().async_register_services()
 
     async def async_send_message(self, message: str, **kwargs: Any) -> None:
         """Speak `message` on the configured Cast player.
@@ -124,11 +156,14 @@ class CastNotifyEntity(NotifyEntity):
     the Cast player it speaks on), and `_attr_name = None` so the entity
     takes that device's name. Without this, every entry produced the same
     `notify.cast_notifier` friendly name and collided on entity id.
+
+    Deliberately no `_attr_translation_key`: a translated name would
+    override the device name for every entry, which is exactly the
+    collision above. `_attr_name = None` is the whole naming rule here.
     """
 
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_translation_key = "cast_notifier"
     _attr_supported_features = NotifyEntityFeature(0)
 
     def __init__(self, entry: CastNotifierConfigEntry) -> None:

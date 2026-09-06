@@ -7,8 +7,10 @@ entry is removed, reconfigured, or migrated.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import pytest
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -106,6 +108,52 @@ async def test_unloading_the_entry_removes_the_legacy_service(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
+    assert not hass.services.has_service("notify", "cast_kitchen")
+
+
+async def test_unload_is_quiet_when_the_service_is_already_gone(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Unloading does not complain about a service that is not registered.
+
+    `hass.services.async_remove` logs "Unable to remove unknown service"
+    for a name it does not know, so the retraction is guarded by
+    `has_service`.
+    """
+    _set_player(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Something else got there first (a YAML reload, a manual removal).
+    hass.services.async_remove("notify", "cast_kitchen")
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert "Unable to remove unknown service" not in caplog.text
+
+
+async def test_the_discovery_task_belongs_to_the_entry(hass: HomeAssistant) -> None:
+    """Setting up then unloading leaves no service behind.
+
+    The legacy platform is discovered through `entry.async_create_task`,
+    so `ConfigEntry.async_unload` awaits it instead of leaving it to
+    register a service against an entry that is already gone.
+    """
+    _set_player(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.NOT_LOADED
     assert not hass.services.has_service("notify", "cast_kitchen")
 
 

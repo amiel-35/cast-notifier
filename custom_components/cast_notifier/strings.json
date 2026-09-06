@@ -29,6 +29,9 @@
     },
     "abort": {
       "already_configured": "This player is already configured for Cast Notifier."
+    },
+    "error": {
+      "player_cannot_play_media": "This player does not support play_media, so it can never speak. Pick a Cast player, or another media player that supports playing media."
     }
   },
   "options": {
@@ -57,11 +60,12 @@
       }
     }
   },
-  "entity": {
-    "notify": {
-      "cast_notifier": {
-        "name": "Cast Notifier"
-      }
+  "exceptions": {
+    "message_refused": {
+      "message": "Cast Notifier did not speak a message about {source_entity} on {player}: the {domain} domain is in this player's deny list."
+    },
+    "invalid_data": {
+      "message": "Cast Notifier did not speak a message on {player}: the data payload is invalid: {error}"
     }
   }
 }

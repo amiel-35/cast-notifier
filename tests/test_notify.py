@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_mock_service,
@@ -18,7 +20,10 @@ from custom_components.cast_notifier.const import (
     CONF_VOLUME,
     DOMAIN,
 )
-from custom_components.cast_notifier.notify import async_get_service
+from custom_components.cast_notifier.notify import (
+    CastNotificationService,
+    async_get_service,
+)
 
 MEDIA_PLAYER = "media_player.kitchen"
 
@@ -95,9 +100,13 @@ async def test_legacy_service_speaks_the_message(hass: HomeAssistant) -> None:
 
 
 async def test_legacy_service_refuses_denied_source_entity(
-    hass: HomeAssistant,
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A call about a denied domain is refused: tts.speak is never called."""
+    """A denied call raises to the caller and is logged (ADR-015).
+
+    It used to be logged and swallowed, so the caller got a silent HTTP
+    200 for a message nobody ever heard.
+    """
     hass.states.async_set(MEDIA_PLAYER, "idle")
 
     entry = _entry()
@@ -107,18 +116,25 @@ async def test_legacy_service_refuses_denied_source_entity(
 
     speak_calls = async_mock_service(hass, "tts", "speak")
 
-    await hass.services.async_call(
-        "notify",
-        "cast_kitchen",
-        {
-            "message": "The alarm is now armed",
-            "data": {"source_entity": "alarm_control_panel.home"},
-        },
-        blocking=True,
-    )
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(ServiceValidationError) as raised,
+    ):
+        await hass.services.async_call(
+            "notify",
+            "cast_kitchen",
+            {
+                "message": "The alarm is now armed",
+                "data": {"source_entity": "alarm_control_panel.home"},
+            },
+            blocking=True,
+        )
     await hass.async_block_till_done()
 
     assert len(speak_calls) == 0
+    assert raised.value.translation_domain == DOMAIN
+    assert raised.value.translation_key == "message_refused"
+    assert "alarm_control_panel.home" in caplog.text
 
 
 async def test_legacy_service_per_call_data_overrides(hass: HomeAssistant) -> None:
@@ -201,8 +217,14 @@ async def test_legacy_service_surfaces_a_tts_failure(hass: HomeAssistant) -> Non
         )
 
 
-async def test_legacy_service_surfaces_invalid_data(hass: HomeAssistant) -> None:
-    """A malformed `data` payload reaches the caller, not a TypeError (I5c)."""
+async def test_legacy_service_surfaces_invalid_data(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A malformed `data` payload reaches the caller, not a TypeError (I5c).
+
+    It is a `ServiceValidationError` -- the call is wrong, not broken --
+    and it is logged as well as raised (ADR-015).
+    """
     hass.states.async_set(MEDIA_PLAYER, "idle")
 
     entry = _entry()
@@ -212,7 +234,10 @@ async def test_legacy_service_surfaces_invalid_data(hass: HomeAssistant) -> None
 
     speak_calls = async_mock_service(hass, "tts", "speak")
 
-    with pytest.raises(HomeAssistantError):
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(ServiceValidationError) as raised,
+    ):
         await hass.services.async_call(
             "notify",
             "cast_kitchen",
@@ -221,6 +246,9 @@ async def test_legacy_service_surfaces_invalid_data(hass: HomeAssistant) -> None
         )
 
     assert len(speak_calls) == 0
+    assert raised.value.translation_domain == DOMAIN
+    assert raised.value.translation_key == "invalid_data"
+    assert "invalid `data` payload" in caplog.text
 
 
 async def test_unexpected_error_is_wrapped_as_home_assistant_error(
@@ -245,6 +273,37 @@ async def test_unexpected_error_is_wrapped_as_home_assistant_error(
         await hass.services.async_call(
             "notify", "cast_kitchen", {"message": "Hello"}, blocking=True
         )
+
+
+async def test_a_late_discovery_does_not_resurrect_the_service(
+    hass: HomeAssistant,
+) -> None:
+    """A discovery landing after the unload registers nothing (B1).
+
+    The legacy platform is set up from a task core owns (the discovery
+    dispatcher runs its listener as its own task), so it can reach
+    `async_get_service` -- or get as far as `async_register_services` with
+    an instance obtained earlier -- after the entry's unload callback has
+    looked for a service that did not exist yet. Both check the `unloaded`
+    flag; without them the entry leaves behind a `notify.cast_<name>`
+    bound to a dead speaker that nothing can retract.
+    """
+    hass.states.async_set(MEDIA_PLAYER, "idle")
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    runtime_data = entry.runtime_data
+    runtime_data.unloaded = True
+
+    assert await async_get_service(hass, {}, {"entry_id": entry.entry_id}) is None
+
+    service = CastNotificationService(hass, runtime_data)
+    await service.async_setup(hass, "cast_late", "cast_late")
+    await service.async_register_services()
+
+    assert not hass.services.has_service("notify", "cast_late")
 
 
 async def test_legacy_platform_refuses_yaml_setup(hass: HomeAssistant) -> None:
