@@ -1,0 +1,60 @@
+{
+  "title": "Cast Notifier",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurar Cast Notifier",
+        "description": "Cast Notifier reproduce mensajes hablados en un altavoz Google Cast mediante tts.speak. Elige aquí el altavoz y el motor de texto a voz; el resto se puede cambiar después desde las opciones de la integración.",
+        "data": {
+          "media_player": "Altavoz Cast",
+          "tts_entity": "Motor de texto a voz",
+          "language": "Idioma",
+          "voice": "Voz",
+          "volume": "Volumen durante el anuncio",
+          "restore_volume": "Restaurar el volumen anterior tras el anuncio",
+          "announce_prefix": "Prefijo del anuncio",
+          "deny_domains": "No anunciar nunca estos dominios"
+        },
+        "data_description": {
+          "media_player": "La entidad media_player (Cast u otra) que hablará.",
+          "tts_entity": "La entidad tts.* usada para generar la voz, por ejemplo tts.home_assistant_cloud.",
+          "language": "Código de idioma opcional pasado a tts.speak, por ejemplo es-ES. Déjalo vacío para usar el idioma predeterminado del motor.",
+          "voice": "Nombre de voz opcional, o un objeto JSON de opciones de tts.speak, por ejemplo {\"voice\": \"es-ES-Standard-A\"}.",
+          "volume": "Si se define, el volumen del altavoz se ajusta a este nivel antes de hablar y se restaura después.",
+          "restore_volume": "Restaurar el volumen que tenía el altavoz antes de hablar, una vez terminado el mensaje.",
+          "announce_prefix": "Texto opcional pronunciado antes de cada mensaje, por ejemplo «Atención.»",
+          "deny_domains": "Dominios de entidad separados por comas. Una llamada cuyo data.source_entity pertenezca a uno de ellos se rechaza y se registra en el log en lugar de anunciarse."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Este altavoz ya está configurado en Cast Notifier."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ajustes de Cast Notifier",
+        "description": "Cambia cómo habla Cast Notifier en este altavoz.",
+        "data": {
+          "tts_entity": "Motor de texto a voz",
+          "language": "Idioma",
+          "voice": "Voz",
+          "volume": "Volumen durante el anuncio",
+          "restore_volume": "Restaurar el volumen anterior tras el anuncio",
+          "announce_prefix": "Prefijo del anuncio",
+          "deny_domains": "No anunciar nunca estos dominios"
+        },
+        "data_description": {
+          "tts_entity": "La entidad tts.* usada para generar la voz, por ejemplo tts.home_assistant_cloud.",
+          "language": "Código de idioma opcional pasado a tts.speak, por ejemplo es-ES. Déjalo vacío para usar el idioma predeterminado del motor.",
+          "voice": "Nombre de voz opcional, o un objeto JSON de opciones de tts.speak, por ejemplo {\"voice\": \"es-ES-Standard-A\"}.",
+          "volume": "Si se define, el volumen del altavoz se ajusta a este nivel antes de hablar y se restaura después.",
+          "restore_volume": "Restaurar el volumen que tenía el altavoz antes de hablar, una vez terminado el mensaje.",
+          "announce_prefix": "Texto opcional pronunciado antes de cada mensaje, por ejemplo «Atención.»",
+          "deny_domains": "Dominios de entidad separados por comas. Una llamada cuyo data.source_entity pertenezca a uno de ellos se rechaza y se registra en el log en lugar de anunciarse."
+        }
+      }
+    }
+  }
+}

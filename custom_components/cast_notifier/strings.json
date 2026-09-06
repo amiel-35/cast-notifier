@@ -1,0 +1,60 @@
+{
+  "title": "Cast Notifier",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Cast Notifier",
+        "description": "Cast Notifier speaks messages on one Google Cast player through tts.speak. Pick the player and the text-to-speech engine to use here; everything else can be changed later from the integration's options.",
+        "data": {
+          "media_player": "Cast player",
+          "tts_entity": "Text-to-speech engine",
+          "language": "Language",
+          "voice": "Voice",
+          "volume": "Volume while speaking",
+          "restore_volume": "Restore previous volume after speaking",
+          "announce_prefix": "Announcement prefix",
+          "deny_domains": "Never speak about these domains"
+        },
+        "data_description": {
+          "media_player": "The Cast (or other) media_player entity that will speak.",
+          "tts_entity": "The tts.* entity used to generate speech, e.g. tts.home_assistant_cloud.",
+          "language": "Optional language code passed to tts.speak, e.g. en-US. Leave empty to use the engine's default.",
+          "voice": "Optional voice name, or a JSON object of tts.speak options, e.g. {\"voice\": \"fr-FR-Standard-A\"}.",
+          "volume": "If set, the player's volume is set to this level before speaking and restored afterwards.",
+          "restore_volume": "Restore the volume the player had before speaking, once the message is done.",
+          "announce_prefix": "Optional text spoken before every message, e.g. \"Attention.\"",
+          "deny_domains": "Comma-separated entity domains. A call whose data.source_entity belongs to one of them is refused and logged instead of spoken."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This player is already configured for Cast Notifier."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cast Notifier settings",
+        "description": "Change how Cast Notifier speaks on this player.",
+        "data": {
+          "tts_entity": "Text-to-speech engine",
+          "language": "Language",
+          "voice": "Voice",
+          "volume": "Volume while speaking",
+          "restore_volume": "Restore previous volume after speaking",
+          "announce_prefix": "Announcement prefix",
+          "deny_domains": "Never speak about these domains"
+        },
+        "data_description": {
+          "tts_entity": "The tts.* entity used to generate speech, e.g. tts.home_assistant_cloud.",
+          "language": "Optional language code passed to tts.speak, e.g. en-US. Leave empty to use the engine's default.",
+          "voice": "Optional voice name, or a JSON object of tts.speak options, e.g. {\"voice\": \"fr-FR-Standard-A\"}.",
+          "volume": "If set, the player's volume is set to this level before speaking and restored afterwards.",
+          "restore_volume": "Restore the volume the player had before speaking, once the message is done.",
+          "announce_prefix": "Optional text spoken before every message, e.g. \"Attention.\"",
+          "deny_domains": "Comma-separated entity domains. A call whose data.source_entity belongs to one of them is refused and logged instead of spoken."
+        }
+      }
+    }
+  }
+}

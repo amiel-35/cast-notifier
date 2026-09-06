@@ -1,0 +1,49 @@
+"""Tests for Cast Notifier diagnostics."""
+
+from __future__ import annotations
+
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.cast_notifier.const import (
+    CONF_DENY_DOMAINS,
+    CONF_MEDIA_PLAYER,
+    CONF_RESTORE_VOLUME,
+    CONF_TTS_ENTITY,
+    CONF_VOLUME,
+    DOMAIN,
+)
+from custom_components.cast_notifier.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
+
+MEDIA_PLAYER = "media_player.kitchen"
+
+
+async def test_diagnostics_report_entry_and_speaker_config(
+    hass: HomeAssistant,
+) -> None:
+    """Diagnostics expose the entry's data/options and the speaker config."""
+    hass.states.async_set(MEDIA_PLAYER, "idle")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MEDIA_PLAYER,
+        data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
+        options={
+            CONF_TTS_ENTITY: "tts.demo",
+            CONF_RESTORE_VOLUME: True,
+            CONF_VOLUME: 0.5,
+            CONF_DENY_DOMAINS: ["alarm_control_panel", "lock"],
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert diagnostics["data"] == {CONF_MEDIA_PLAYER: MEDIA_PLAYER}
+    assert diagnostics["options"][CONF_TTS_ENTITY] == "tts.demo"
+    assert diagnostics["speaker_config"]["media_player"] == MEDIA_PLAYER
+    assert diagnostics["speaker_config"]["volume"] == 0.5
+    assert diagnostics["service_name"] == "cast_kitchen"

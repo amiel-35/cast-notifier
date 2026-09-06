@@ -1,0 +1,47 @@
+# Quality scale self-assessment for Cast Notifier.
+# Bronze is the target for this first release. Silver/gold are not
+# assessed yet.
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: This integration does not register any custom actions/services.
+  appropriate-polling:
+    status: exempt
+    comment: iot_class is local_push; there is nothing to poll.
+  brands:
+    status: todo
+    comment: Brand assets not yet submitted to home-assistant/brands.
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency: done
+  docs-actions:
+    status: exempt
+    comment: No custom services.yaml is shipped; behaviour is configured
+      entirely through the config/options flow.
+  docs-conditions:
+    status: exempt
+    comment: This integration does not have any conditions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: This integration does not have any triggers.
+  entity-event-setup:
+    status: exempt
+    comment: The notify entity does not subscribe to any external event bus.
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure:
+    status: exempt
+    comment: >-
+      There is no external device or service to validate during setup: the
+      media_player and tts_entity are picked from entities Home Assistant
+      already knows about.
+  test-before-setup:
+    status: exempt
+    comment: Same reasoning as test-before-configure.
+  unique-config-entry: done
