@@ -8,7 +8,11 @@ rules:
     comment: This integration does not register any custom actions/services.
   appropriate-polling:
     status: exempt
-    comment: iot_class is local_push; there is nothing to poll.
+    comment: >-
+      iot_class is calculated: this is a helper integration
+      (integration_type helper) that owns no device and no connection of
+      its own; it only calls tts.speak and media_player.* on entities Home
+      Assistant already has. There is nothing to poll.
   brands:
     status: todo
     comment: Brand assets not yet submitted to home-assistant/brands.

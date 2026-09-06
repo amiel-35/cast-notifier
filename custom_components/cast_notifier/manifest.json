@@ -14,8 +14,8 @@
     "media_player"
   ],
   "documentation": "https://github.com/amiel-35/cast-notifier",
-  "integration_type": "device",
-  "iot_class": "local_push",
+  "integration_type": "helper",
+  "iot_class": "calculated",
   "issue_tracker": "https://github.com/amiel-35/cast-notifier/issues",
   "requirements": [],
   "version": "0.1.0"
