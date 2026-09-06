@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-07
+
+### Fixed
+
+- A message refused by `deny_domains` now **fails the call** instead of
+  being logged and swallowed. It was answered with a silent success, so an
+  automation could believe it had spoken. `CastNotifierRefused` and
+  `CastNotifierInvalidData` are now translated `ServiceValidationError`s
+  raised to the caller (ADR-015 of the suite), and are still logged at
+  WARNING. Under core `alert`, which calls its notifiers without waiting
+  for them, a refusal now produces two log lines -- see
+  [`docs/known-issues.md`](docs/known-issues.md).
+- The config flow refuses a `media_player` whose `supported_features`
+  lacks `PLAY_MEDIA`, with the form error `player_cannot_play_media`.
+  Configuring such a player used to succeed and then fail with
+  `ServiceNotSupported` on every announcement.
+- An entry that unloaded while its legacy platform was still being
+  discovered left a `notify.cast_<name>` behind, bound to a dead speaker
+  and with nothing left to retract it: the discovery runs in a task core
+  owns, so it could register the service *after* the unload callback had
+  looked for it. Both `async_get_service` and `async_register_services`
+  now check whether the entry has unloaded.
+- Unloading an entry only removes its `notify.cast_<name>` service if it is
+  actually registered (no more "Unable to remove unknown service" in the
+  log), and the discovery is tied to the entry (`entry.async_create_task`)
+  rather than left to outlive it.
+
+### Changed
+
+- Removed the unused `entity.notify.cast_notifier.name` translation key and
+  the entity's `_attr_translation_key`: the notify entity takes its device's
+  name (`_attr_name = None`), which is what keeps two entries
+  distinguishable.
+- Documentation: a "Refusals raise -- ADR-015 of the suite" section and the
+  `PLAY_MEDIA` check in `docs/ARCHITECTURE.md`, a new
+  `docs/known-issues.md`, and a README section on the up-to-5s wait when
+  the player is already playing.
+
 ## [0.1.0] - 2026-09-07
 
 ### Added
@@ -50,5 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifecycle, the config flow, the speaker logic, the notify platform,
   diagnostics, and translation key parity.
 
-[Unreleased]: https://github.com/amiel-35/cast-notifier/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/amiel-35/cast-notifier/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/amiel-35/cast-notifier/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amiel-35/cast-notifier/releases/tag/v0.1.0
