@@ -4,38 +4,38 @@
     "step": {
       "user": {
         "title": "Configurer Cast Notifier",
-        "description": "Cast Notifier prononce des messages sur un appareil Google Cast via tts.speak. Choisissez ici l'appareil et le moteur de synthèse vocale ; le reste peut être modifié plus tard depuis les options de l'intégration.",
+        "description": "Cast Notifier prononce des messages sur une enceinte Google Cast via tts.speak. Choisissez ici l'enceinte et le moteur de synthèse vocale ; le reste peut être modifié plus tard depuis les options de l'intégration.",
         "data": {
-          "media_player": "Appareil Cast",
+          "media_player": "Enceinte Cast",
           "tts_entity": "Moteur de synthèse vocale",
           "language": "Langue",
           "voice": "Voix",
           "volume": "Volume pendant l'annonce",
           "restore_volume": "Restaurer le volume précédent après l'annonce",
           "announce_prefix": "Préfixe d'annonce",
-          "deny_domains": "Ne jamais énoncer ces domaines"
+          "deny_domains": "Domaines jamais annoncés"
         },
         "data_description": {
           "media_player": "L'entité media_player (Cast ou autre) qui prononcera les messages.",
           "tts_entity": "L'entité tts.* utilisée pour générer la voix, par exemple tts.home_assistant_cloud.",
           "language": "Code de langue optionnel transmis à tts.speak, par exemple fr-FR. Laisser vide pour utiliser la langue par défaut du moteur.",
           "voice": "Nom de voix optionnel, ou un objet JSON d'options tts.speak, par exemple {\"voice\": \"fr-FR-Standard-A\"}.",
-          "volume": "Si défini, le volume de l'appareil est réglé à ce niveau avant l'annonce puis restauré ensuite.",
-          "restore_volume": "Restaurer le volume que l'appareil avait avant l'annonce, une fois le message terminé.",
+          "volume": "Si défini, le volume de l'enceinte est réglé à ce niveau avant l'annonce puis restauré ensuite.",
+          "restore_volume": "Restaurer le volume que l'enceinte avait avant l'annonce, une fois le message terminé.",
           "announce_prefix": "Texte optionnel prononcé avant chaque message, par exemple « Attention. »",
           "deny_domains": "Domaines d'entités séparés par des virgules. Un appel dont data.source_entity appartient à l'un d'eux est refusé et journalisé au lieu d'être prononcé."
         }
       }
     },
     "abort": {
-      "already_configured": "Cet appareil est déjà configuré pour Cast Notifier."
+      "already_configured": "Cette enceinte est déjà configurée pour Cast Notifier."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Paramètres de Cast Notifier",
-        "description": "Modifier la façon dont Cast Notifier parle sur cet appareil.",
+        "description": "Modifier la façon dont Cast Notifier parle sur cette enceinte.",
         "data": {
           "tts_entity": "Moteur de synthèse vocale",
           "language": "Langue",
@@ -43,17 +43,24 @@
           "volume": "Volume pendant l'annonce",
           "restore_volume": "Restaurer le volume précédent après l'annonce",
           "announce_prefix": "Préfixe d'annonce",
-          "deny_domains": "Ne jamais énoncer ces domaines"
+          "deny_domains": "Domaines jamais annoncés"
         },
         "data_description": {
           "tts_entity": "L'entité tts.* utilisée pour générer la voix, par exemple tts.home_assistant_cloud.",
           "language": "Code de langue optionnel transmis à tts.speak, par exemple fr-FR. Laisser vide pour utiliser la langue par défaut du moteur.",
           "voice": "Nom de voix optionnel, ou un objet JSON d'options tts.speak, par exemple {\"voice\": \"fr-FR-Standard-A\"}.",
-          "volume": "Si défini, le volume de l'appareil est réglé à ce niveau avant l'annonce puis restauré ensuite.",
-          "restore_volume": "Restaurer le volume que l'appareil avait avant l'annonce, une fois le message terminé.",
+          "volume": "Si défini, le volume de l'enceinte est réglé à ce niveau avant l'annonce puis restauré ensuite.",
+          "restore_volume": "Restaurer le volume que l'enceinte avait avant l'annonce, une fois le message terminé.",
           "announce_prefix": "Texte optionnel prononcé avant chaque message, par exemple « Attention. »",
           "deny_domains": "Domaines d'entités séparés par des virgules. Un appel dont data.source_entity appartient à l'un d'eux est refusé et journalisé au lieu d'être prononcé."
         }
+      }
+    }
+  },
+  "entity": {
+    "notify": {
+      "cast_notifier": {
+        "name": "Cast Notifier"
       }
     }
   }

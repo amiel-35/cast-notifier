@@ -56,5 +56,12 @@
         }
       }
     }
+  },
+  "entity": {
+    "notify": {
+      "cast_notifier": {
+        "name": "Cast Notifier"
+      }
+    }
   }
 }
