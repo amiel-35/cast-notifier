@@ -48,3 +48,5 @@ jobs:
         with:
           name: coverage-${{ matrix.ha-version }}
           path: coverage.xml
+
+# Re-saved on 2026-09-07 to re-register push/tag triggers (push events were not scheduling runs on this repository).

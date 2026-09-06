@@ -22,3 +22,5 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+
+# Re-saved on 2026-09-07 to re-register push/tag triggers (push events were not scheduling runs on this repository).

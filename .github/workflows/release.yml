@@ -23,3 +23,5 @@ jobs:
         with:
           files: cast_notifier.zip
           generate_release_notes: true
+
+# Re-saved on 2026-09-07 to re-register push/tag triggers (push events were not scheduling runs on this repository).
