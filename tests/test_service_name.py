@@ -4,7 +4,9 @@ Until 0.1.1 the name came from the *entity id* of the Cast player, so a
 player whose entity id had been auto-suffixed produced
 `notify.cast_kitchen_2` for an entry titled "Kitchen" -- a name nobody
 could have predicted from the UI. Since 0.2.0 it comes from the entry
-title, which is what the user sees and can rename.
+title, which is what the user sees and can rename, and the name each
+entry ends up with is frozen in its `entry.data` so that nothing another
+entry does can move it.
 """
 
 from __future__ import annotations
@@ -12,11 +14,11 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.media_player import MediaPlayerEntityFeature
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.cast_notifier import _service_name
 from custom_components.cast_notifier.const import (
     CONF_ANNOUNCE_PREFIX,
     CONF_DENY_DOMAINS,
@@ -30,6 +32,11 @@ from custom_components.cast_notifier.const import (
 )
 
 MEDIA_PLAYER = "media_player.kitchen_2"
+# The `entry.data` keys the service name is frozen into. Spelled out
+# rather than imported: they are an on-disk contract, and a test that
+# imported the constant could not notice one of them being renamed.
+SERVICE_NAME_KEY = "service_name"
+SERVICE_NAME_BASE_KEY = "service_name_base"
 CAST_FEATURES = (
     MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.VOLUME_SET
 )
@@ -203,15 +210,219 @@ async def test_an_unsluggable_title_keeps_the_core_fallback(
     assert hass.services.has_service("notify", "cast_unknown")
 
 
-async def test_naming_an_entry_hass_does_not_know_about(hass: HomeAssistant) -> None:
-    """The dedup pass degrades to the plain slug for an unregistered entry.
+async def test_a_rename_onto_a_name_another_entry_owns_takes_the_next_one(
+    hass: HomeAssistant,
+) -> None:
+    """Renaming an entry onto a taken name must not evict the owner.
 
-    `_service_name` walks `hass.config_entries.async_entries(DOMAIN)` to
-    find out how many entries want the same slug. An entry that is not in
-    that list -- a bare `MockConfigEntry`, or one being torn down -- has
-    nothing to collide with, and still needs a name.
+    "Kitchen" was created first, so it is first in creation order; rename
+    it to "Dining" and a name derived from creation order alone hands it
+    `cast_dining`, which the second entry already owns and has already
+    registered. `notify/legacy.py::BaseNotificationService`
+    `async_register_services` returns early when
+    `hass.services.has_service(DOMAIN, self._service_name)` is already
+    true (2026.9.1, line 312), so the renamed entry would register
+    nothing at all and both entries would believe they own
+    `notify.cast_dining` -- one of them speaking on the other's player.
     """
-    entry = _entry("media_player.kitchen", title="Kitchen")
+    _set_player(hass, "media_player.upstairs")
+    _set_player(hass, "media_player.downstairs")
 
-    assert _service_name(hass, entry) == "cast_kitchen"
-    assert not hass.config_entries.async_entries(DOMAIN)
+    first = _entry("media_player.upstairs", title="Kitchen")
+    first.add_to_hass(hass)
+    second = _entry("media_player.downstairs", title="Dining")
+    second.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+    assert first.runtime_data.service_name == "cast_kitchen"
+    assert second.runtime_data.service_name == "cast_dining"
+
+    hass.config_entries.async_update_entry(first, title="Dining")
+    await hass.async_block_till_done()
+
+    assert second.runtime_data.service_name == "cast_dining"
+    assert first.runtime_data.service_name == "cast_dining_2"
+    assert hass.services.has_service("notify", "cast_dining")
+    assert hass.services.has_service("notify", "cast_dining_2")
+    assert not hass.services.has_service("notify", "cast_kitchen")
+
+
+async def test_unloading_after_a_rename_leaves_the_other_service_alone(
+    hass: HomeAssistant,
+) -> None:
+    """An entry only ever retracts the service it owns.
+
+    Second half of the collision above: with both entries believing they
+    own `notify.cast_dining`, unloading the renamed one would remove a
+    service the other is still serving, and the surviving entry -- still
+    LOADED -- would go silent with nothing in the log to say so.
+    """
+    _set_player(hass, "media_player.upstairs")
+    _set_player(hass, "media_player.downstairs")
+
+    first = _entry("media_player.upstairs", title="Kitchen")
+    first.add_to_hass(hass)
+    second = _entry("media_player.downstairs", title="Dining")
+    second.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+
+    hass.config_entries.async_update_entry(first, title="Dining")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert second.state is ConfigEntryState.LOADED
+    assert hass.services.has_service("notify", "cast_dining")
+    assert not hass.services.has_service("notify", "cast_dining_2")
+
+
+async def test_a_new_entry_never_takes_a_name_a_surviving_entry_owns(
+    hass: HomeAssistant,
+) -> None:
+    """Removing an entry must not hand its neighbour's name to a new one.
+
+    Two entries titled "Speaker" own `cast_speaker` and `cast_speaker_2`.
+    Delete the first and add a third one called "Speaker": numbering by
+    creation order gives the newcomer `cast_speaker_2`, which the
+    survivor owns and has registered -- the same silent no-op as above,
+    plus a service that dies with the wrong entry.
+    """
+    for player in ("media_player.upstairs", "media_player.downstairs"):
+        _set_player(hass, player)
+
+    first = _entry("media_player.upstairs", title="Speaker")
+    first.add_to_hass(hass)
+    second = _entry("media_player.downstairs", title="Speaker")
+    second.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+    assert second.runtime_data.service_name == "cast_speaker_2"
+
+    await hass.config_entries.async_remove(first.entry_id)
+    await hass.async_block_till_done()
+
+    _set_player(hass, "media_player.garden")
+    third = _entry("media_player.garden", title="Speaker")
+    third.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(third.entry_id)
+    await hass.async_block_till_done()
+
+    assert third.runtime_data.service_name == "cast_speaker"
+    assert second.runtime_data.service_name == "cast_speaker_2"
+    assert hass.services.has_service("notify", "cast_speaker")
+    assert hass.services.has_service("notify", "cast_speaker_2")
+
+
+async def test_removing_an_entry_does_not_rename_the_other(
+    hass: HomeAssistant,
+) -> None:
+    """The survivor of two entries sharing a title keeps its own name.
+
+    Until 0.2.0 the number came from the entry's rank in creation order,
+    so deleting `cast_speaker` promoted `cast_speaker_2` to `cast_speaker`
+    on its next reload -- silently, since nothing about that entry had
+    changed. A frozen name cannot move on its own.
+    """
+    _set_player(hass, "media_player.upstairs")
+    _set_player(hass, "media_player.downstairs")
+
+    first = _entry("media_player.upstairs", title="Speaker")
+    first.add_to_hass(hass)
+    second = _entry("media_player.downstairs", title="Speaker")
+    second.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+
+    await hass.config_entries.async_remove(first.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_reload(second.entry_id)
+    await hass.async_block_till_done()
+
+    assert second.runtime_data.service_name == "cast_speaker_2"
+    assert hass.services.has_service("notify", "cast_speaker_2")
+
+
+async def test_the_name_is_frozen_in_the_entry_data(hass: HomeAssistant) -> None:
+    """The chosen name is written to `entry.data`, so a restart keeps it.
+
+    An entry from 0.1.x has no stored name -- this is the upgrade path:
+    the first setup after the upgrade picks one and freezes it, and every
+    later setup reuses it instead of recomputing from whatever the entry
+    list looks like then.
+    """
+    _set_player(hass, "media_player.upstairs")
+    _set_player(hass, "media_player.downstairs")
+
+    first = _entry("media_player.upstairs", title="Speaker")
+    first.add_to_hass(hass)
+    second = _entry("media_player.downstairs", title="Speaker")
+    second.add_to_hass(hass)
+    assert SERVICE_NAME_KEY not in first.data
+
+    assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert first.data[SERVICE_NAME_KEY] == "cast_speaker"
+    assert first.data[SERVICE_NAME_BASE_KEY] == "cast_speaker"
+    assert second.data[SERVICE_NAME_KEY] == "cast_speaker_2"
+    assert second.data[SERVICE_NAME_BASE_KEY] == "cast_speaker"
+
+
+async def test_a_frozen_name_survives_a_reload(hass: HomeAssistant) -> None:
+    """Reloading both entries in any order gives back the same two names."""
+    _set_player(hass, "media_player.upstairs")
+    _set_player(hass, "media_player.downstairs")
+
+    first = _entry("media_player.upstairs", title="Speaker")
+    first.add_to_hass(hass)
+    second = _entry("media_player.downstairs", title="Speaker")
+    second.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_reload(second.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_reload(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert first.runtime_data.service_name == "cast_speaker"
+    assert second.runtime_data.service_name == "cast_speaker_2"
+
+
+async def test_a_notify_service_owned_by_something_else_is_left_alone(
+    hass: HomeAssistant,
+) -> None:
+    """A `notify.*` name another integration already serves is never taken.
+
+    Core registers nothing when the name is already in use (see the
+    collision test above), so claiming it would leave this entry mute and
+    unloading it would delete somebody else's service.
+    """
+
+    async def _foreign(call: Any) -> None:
+        """Stand in for another integration's notify service."""
+
+    hass.services.async_register("notify", "cast_kitchen", _foreign)
+
+    _set_player(hass, MEDIA_PLAYER)
+    entry = _entry(title="Kitchen")
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.runtime_data.service_name == "cast_kitchen_2"
+    assert hass.services.has_service("notify", "cast_kitchen_2")
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.services.has_service("notify", "cast_kitchen")
+    assert not hass.services.has_service("notify", "cast_kitchen_2")
