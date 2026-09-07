@@ -187,7 +187,7 @@ async def test_deny_domains_refuses_without_calling_tts(
 ) -> None:
     """A denied message is refused, never spoken, logged *and* raised.
 
-    ADR-015: a refusal is an error for the caller, not a silent success.
+    ADR-0003: a refusal is an error for the caller, not a silent success.
     The WARNING stays because the log line is the operator's only trace
     when the caller did not pass `blocking: true`.
     """
@@ -219,7 +219,7 @@ async def test_deny_domains_refuses_without_calling_tts(
 
 
 async def test_refusals_are_service_validation_errors(hass: HomeAssistant) -> None:
-    """Both refusal types are `ServiceValidationError`s (ADR-015).
+    """Both refusal types are `ServiceValidationError`s (ADR-0003).
 
     Home Assistant renders those as their translated message, without a
     traceback: the caller asked for something refused, nothing crashed.
@@ -548,7 +548,7 @@ async def test_invalid_data_is_refused_with_a_clear_error(
 ) -> None:
     """A malformed `data` payload raises `CastNotifierInvalidData` (I5c).
 
-    Translated for the caller, logged for the operator (ADR-015).
+    Translated for the caller, logged for the operator (ADR-0003).
     """
     _set_player(hass, "idle")
     calls = async_mock_service(hass, "tts", "speak")

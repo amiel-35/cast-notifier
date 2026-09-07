@@ -98,7 +98,7 @@ rules:
       Both notify surfaces raise: a refusal (deny_domains, quiet hours) or
       a malformed data payload is a ServiceValidationError translated
       through the exceptions section of strings.json, and a failure of
-      tts.speak is a HomeAssistantError. Nothing is swallowed -- ADR-015
+      tts.speak is a HomeAssistantError. Nothing is swallowed -- ADR-0003
       of the suite, see docs/ARCHITECTURE.md.
   config-entry-unloading:
     status: done

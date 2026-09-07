@@ -205,7 +205,7 @@ The `NotifyEntity` surface has no `data` payload (`NotifyEntityFeature`
 does not define one), so per-call overrides and `deny_domains` enforcement
 are only reachable through the legacy service today.
 
-### Refusals raise -- ADR-015 of the suite
+### Refusals raise -- [ADR-0003](ADR/0003-refusals-raise.md)
 
 Every failure reaches the caller; `notify.py::_async_speak` swallows
 nothing. A `deny_domains` refusal (`CastNotifierRefused`) and a malformed
@@ -253,7 +253,7 @@ Inside the window:
 
 - with a `quiet_volume`, the message is spoken at that volume;
 - without one, it is **refused**: `CastNotifierQuietHours`, a translated
-  `ServiceValidationError` like the other two (ADR-015), plus an INFO log
+  `ServiceValidationError` like the other two (ADR-0003), plus an INFO log
   line carrying the reason `quiet_hours` and the window. INFO, not
   WARNING: the configuration is doing exactly what it was told to do.
 
@@ -284,7 +284,7 @@ volume. The reverse holds too: a call accepted at 06:59:59 keeps the
 The alternative -- evaluating inside the lock -- trades that for a worse
 one: a caller would then block for up to 30 seconds before being told its
 message was refused, and a refusal is precisely the answer that should
-come back immediately (ADR-015). The window is a 30-second-fuzzy boundary
+come back immediately (ADR-0003). The window is a 30-second-fuzzy boundary
 on a rule measured in hours; a refusal that takes 30 seconds to arrive is
 a bug in every automation that waits for it.
 
@@ -332,8 +332,9 @@ flow and again at comparison time, so an entry stored before that
 normalization still behaves).
 
 **Its scope is exactly the `data.source_entity` a caller chose to
-declare.** It is a safety net, not a guarantee, and per project doctrine
-ADR-010 it is documented as one:
+declare.** It is a safety net, not a guarantee, and per
+[ADR-0004](ADR/0004-deny-list-is-a-declared-guard.md) it is documented as
+one:
 
 - it never inspects the message text, so a message *about* the alarm that
   does not declare `source_entity` is spoken;

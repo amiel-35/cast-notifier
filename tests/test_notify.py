@@ -108,7 +108,7 @@ async def test_legacy_service_speaks_the_message(hass: HomeAssistant) -> None:
 async def test_legacy_service_refuses_denied_source_entity(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A denied call raises to the caller and is logged (ADR-015).
+    """A denied call raises to the caller and is logged (ADR-0003).
 
     It used to be logged and swallowed, so the caller got a silent HTTP
     200 for a message nobody ever heard.
@@ -229,7 +229,7 @@ async def test_legacy_service_surfaces_invalid_data(
     """A malformed `data` payload reaches the caller, not a TypeError (I5c).
 
     It is a `ServiceValidationError` -- the call is wrong, not broken --
-    and it is logged as well as raised (ADR-015).
+    and it is logged as well as raised (ADR-0003).
     """
     hass.states.async_set(MEDIA_PLAYER, "idle")
 

@@ -78,9 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being logged and swallowed. It was answered with a silent success, so an
   automation could believe it had spoken. `CastNotifierRefused` and
   `CastNotifierInvalidData` are now translated `ServiceValidationError`s
-  raised to the caller (ADR-015 of the suite), and are still logged at
-  WARNING. Under core `alert`, which calls its notifiers without waiting
-  for them, a refusal now produces two log lines -- see
+  raised to the caller ([ADR-0003](docs/ADR/0003-refusals-raise.md)), and
+  are still logged at WARNING. Under core `alert`, which calls its
+  notifiers without waiting for them, a refusal now produces two log
+  lines -- see
   [`docs/known-issues.md`](docs/known-issues.md).
 - The config flow refuses a `media_player` whose `supported_features`
   lacks `PLAY_MEDIA`, with the form error `player_cannot_play_media`.
@@ -103,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the entity's `_attr_translation_key`: the notify entity takes its device's
   name (`_attr_name = None`), which is what keeps two entries
   distinguishable.
-- Documentation: a "Refusals raise -- ADR-015 of the suite" section and the
+- Documentation: a "Refusals raise" section and the
   `PLAY_MEDIA` check in `docs/ARCHITECTURE.md`, a new
   `docs/known-issues.md`, and a README section on the up-to-5s wait when
   the player is already playing.

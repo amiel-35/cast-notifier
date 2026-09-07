@@ -29,7 +29,7 @@ announcement volume was 0.40, and nothing in the logs explains it.
    (0–1 slider, optional). Inside the window: if `quiet_volume` is set, the
    message is spoken at that volume instead of the configured/`data.volume`
    one; if it is not set, the message is **refused** with a translated
-   `ServiceValidationError` (ADR-015 of the suite: refusals raise), logged at
+   `ServiceValidationError` (ADR-0003: refusals raise), logged at
    INFO with the reason `quiet_hours`. `data.priority: "critical"` (the key
    Notify Switchboard forwards untouched) bypasses quiet hours entirely.
    Per-call `data.volume` still wins over `quiet_volume`.

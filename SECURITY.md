@@ -17,8 +17,8 @@ reachable from the `NotifyEntity` surface, which has no `data` payload at
 all. A message about your alarm sent without `data.source_entity` is spoken
 like any other. Its purpose is to turn "never announce the alarm" into a
 setting an automation opts into, so that a wiring mistake in one automation
-is caught by configuration rather than by review (project doctrine
-ADR-010).
+is caught by configuration rather than by review
+([ADR-0004](docs/ADR/0004-deny-list-is-a-declared-guard.md)).
 
 In particular, `deny_domains` is no defence against anyone who can already
 call services on your Home Assistant instance: at that point they can call

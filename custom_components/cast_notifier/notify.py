@@ -9,13 +9,13 @@ modern automations expect:
 - `async_setup_entry` registers a `NotifyEntity` for the same config entry.
 
 Both simply build a `SpeakRequest` from the call's `message`/`data` and hand
-it to the shared `CastSpeaker`. Nothing is swallowed here: per ADR-015 of
-the suite, a call that did not speak fails. A `deny_domains` refusal and a
-malformed `data` payload both reach the caller as a translated
-`ServiceValidationError` (and are logged as warnings by `CastSpeaker` on
-the way out); an unavailable TTS engine or a dead player reaches it as a
-`HomeAssistantError`. An automation that believes it spoke when it did not
-is worse than a red error in its trace.
+it to the shared `CastSpeaker`. Nothing is swallowed here: per
+docs/ADR/0003-refusals-raise.md, a call that did not speak fails. A
+`deny_domains` refusal and a malformed `data` payload both reach the caller
+as a translated `ServiceValidationError` (and are logged as warnings by
+`CastSpeaker` on the way out); an unavailable TTS engine or a dead player
+reaches it as a `HomeAssistantError`. An automation that believes it spoke
+when it did not is worse than a red error in its trace.
 """
 
 from __future__ import annotations
@@ -56,7 +56,8 @@ async def _async_speak(speaker: CastSpeaker, request: SpeakRequest) -> None:
     has already logged as a warning -- is raised to the caller as a
     `HomeAssistantError` after `CastSpeaker` has restored any volume it
     changed. Swallowing a refusal would answer an automation with a silent
-    HTTP 200 for a message nobody ever heard (ADR-015).
+    HTTP 200 for a message nobody ever heard
+    (docs/ADR/0003-refusals-raise.md).
     """
     try:
         await speaker.async_speak(request)

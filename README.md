@@ -195,9 +195,10 @@ Cast Notifier speaks and returns straight away.
 in one of those domains**. That is the whole of its contract. It is an
 opt-in safety net for automations that declare what they are talking about
 -- a way to make "never announce the alarm" a setting rather than a code
-review -- and it follows the project doctrine ADR-010: a guard belongs
-where the caller can state its intent, and must not pretend to cover what
-it cannot see.
+review -- and it follows
+[ADR-0004](docs/ADR/0004-deny-list-is-a-declared-guard.md): a guard
+belongs where the caller can state its intent, and must not pretend to
+cover what it cannot see.
 
 What it therefore does **not** do:
 

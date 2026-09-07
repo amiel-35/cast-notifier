@@ -106,8 +106,8 @@ SPEAK_DATA_SCHEMA = vol.Schema(
 # `HomeAssistantError`s: the caller asked for something this integration
 # refuses to do, which is a problem with the call, not a failure inside it.
 # Home Assistant renders a `ServiceValidationError` as its translated
-# message without a traceback, and per ADR-015 of the suite both reach the
-# caller instead of being swallowed -- see docs/ARCHITECTURE.md.
+# message without a traceback, and per docs/ADR/0003-refusals-raise.md
+# both reach the caller instead of being swallowed.
 
 
 class CastNotifierRefused(ServiceValidationError):
@@ -286,7 +286,7 @@ class CastSpeaker:
         `deny_domains`, and `CastNotifierQuietHours` if the call lands
         inside a quiet window with no `quiet_volume` to speak it at -- the
         message is never sent to `tts.speak` in any of the three cases.
-        All are `ServiceValidationError`s that reach the caller (ADR-015)
+        All are `ServiceValidationError`s that reach the caller (ADR-0003)
         as well as the log. All three checks run before the per-player
         lock, so a refused call never queues behind an announcement in
         progress.
@@ -415,7 +415,7 @@ class CastSpeaker:
             validated: dict[str, Any] = SPEAK_DATA_SCHEMA(request.data)
         except vol.Invalid as err:
             # Logged *and* raised: the caller must know nothing was spoken
-            # (ADR-015), and a call made without `blocking: true` -- core
+            # (ADR-0003), and a call made without `blocking: true` -- core
             # `alert` does exactly that -- would otherwise leave no trace
             # an operator can find.
             _LOGGER.warning(
@@ -443,7 +443,7 @@ class CastSpeaker:
             return
         domain = source_entity.split(".", 1)[0].casefold()
         if domain in self._denied_domains():
-            # Logged *and* raised (ADR-015): the log line carries the full
+            # Logged *and* raised (ADR-0003): the log line carries the full
             # context for an operator, the exception tells the caller that
             # nothing was spoken. A refusal that only logged would be an
             # HTTP 200 for a message nobody ever heard.
@@ -473,7 +473,7 @@ class CastSpeaker:
         when the call lands inside the window and there is one. Raises
         `CastNotifierQuietHours` when the call lands inside the window
         with no `quiet_volume`: the entry has said "no announcements at
-        this hour", and per ADR-015 that is an error for the caller, not
+        this hour", and per ADR-0003 that is an error for the caller, not
         a silent success.
 
         `data.priority: "critical"` bypasses the window entirely, volume
@@ -502,7 +502,7 @@ class CastSpeaker:
         # INFO, not WARNING: this is the configuration doing its job, not
         # something going wrong. It is still logged, because a caller
         # without `blocking: true` would otherwise have no trace at all of
-        # a message that was never spoken (ADR-015).
+        # a message that was never spoken (ADR-0003).
         _LOGGER.info(
             "Not speaking on %s: reason quiet_hours, window %s-%s, local time %s",
             self.config.media_player,

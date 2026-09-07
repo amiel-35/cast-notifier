@@ -127,7 +127,7 @@ async def test_a_message_inside_quiet_hours_is_refused(
 ) -> None:
     """With no `quiet_volume`, a night message is refused, not spoken.
 
-    ADR-015 of the suite: a refusal raises, so an automation is told the
+    ADR-0003: a refusal raises, so an automation is told the
     message was not spoken instead of being answered with a silent
     success.
     """

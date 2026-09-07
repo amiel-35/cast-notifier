@@ -7,8 +7,8 @@ before they surprise someone in a log.
 
 Since 0.1.1, a `deny_domains` refusal and an invalid `data` payload are
 raised to the caller as a translated `ServiceValidationError`, on top of
-being logged at WARNING by `CastSpeaker` ("Refusals raise -- ADR-015 of the
-suite" in [`ARCHITECTURE.md`](ARCHITECTURE.md)).
+being logged at WARNING by `CastSpeaker`
+([ADR-0003](ADR/0003-refusals-raise.md)).
 
 Core's `alert` integration calls its notifiers **without** `blocking`
 (`homeassistant/components/alert/entity.py`,
@@ -79,8 +79,9 @@ different titles and the situation never arises.
 ## A quiet-hours refusal is invisible unless the caller waits
 
 Like every other refusal, a message blocked by quiet hours raises
-(ADR-015). It is logged at INFO with the reason `quiet_hours`, not at
-WARNING: the configuration is doing what it was told to do, and a nightly
+([ADR-0003](ADR/0003-refusals-raise.md)). It is logged at INFO with the
+reason `quiet_hours`, not at WARNING: the configuration is doing what it
+was told to do, and a nightly
 alert would otherwise fill the log with warnings about working as
 intended. An operator who wants to see them has to be logging at INFO, or
 call with `blocking: true` and read the error.
