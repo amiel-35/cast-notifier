@@ -135,6 +135,14 @@ def _async_service_name(hass: HomeAssistant, entry: CastNotifierConfigEntry) -> 
     concurrently (`homeassistant/setup.py`, `asyncio.gather` over
     `entry.async_setup_locked`).
 
+    The freeze binds this integration to itself, not to core. A stored
+    name that a *different* integration has started serving since -- it
+    could register one while this entry was unloaded -- is dropped and
+    recomputed: core would refuse to register over it (same early return
+    as above), so reusing it would leave this entry LOADED and mute, and
+    its unload would delete the other integration's service. The
+    recomputed name is persisted, so this costs one write, once.
+
     This is a `callback`: the ownership claim and the `entry.data` write
     happen without an await between them, so two entries setting up in
     the same event loop iteration cannot both claim one name.
@@ -147,6 +155,7 @@ def _async_service_name(hass: HomeAssistant, entry: CastNotifierConfigEntry) -> 
         and stored
         and entry.data.get(CONF_SERVICE_NAME_BASE) == base
         and stored not in _taken_service_names(hass, entry)
+        and not _is_foreign_service(hass, stored)
     ):
         owners[stored] = entry.entry_id
         return stored
