@@ -85,6 +85,22 @@ alert would otherwise fill the log with warnings about working as
 intended. An operator who wants to see them has to be logging at INFO, or
 call with `blocking: true` and read the error.
 
+## A message can cross the edge of the quiet window
+
+Quiet hours are decided when the call arrives, not when the message is
+actually spoken (`speaker.py`, `async_speak`: the check runs before the
+per-player lock, like the deny list). Announcements on one player are
+serialized, and one can wait up to `PLAYBACK_TIMEOUT` -- 30 seconds --
+for the previous one to finish. A message accepted at 21:59:59 for a
+window starting at 22:00 can therefore be heard, at full volume, just
+after 22:00; one accepted at 06:59:59 can be heard at `quiet_volume`
+just after 07:00.
+
+Deliberate: evaluating inside the lock would make a *refusal* take up to
+30 seconds to reach a caller that is waiting for it, which is worse than
+a boundary that is fuzzy by half a minute. See
+[`ARCHITECTURE.md`](ARCHITECTURE.md), "Quiet hours".
+
 ## `volume_while_playing` can be missing from the timeline
 
 The volume timeline's fourth reading comes from a state listener watching

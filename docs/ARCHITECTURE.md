@@ -267,6 +267,21 @@ window) > the entry's `volume`. The check runs before the per-player
 lock, like the deny list, so a refused call never queues behind an
 announcement in progress.
 
+That placement has a consequence worth stating: **the window is evaluated
+when the call arrives, not when the message is spoken.** A call that
+lands at 21:59:59 on a `22:00`-`07:00` window is decided as daytime, and
+if it then waits behind an announcement already in progress -- up to
+`PLAYBACK_TIMEOUT`, 30 seconds -- it is spoken after 22:00, at full
+volume. The reverse holds too: a call accepted at 06:59:59 keeps the
+`quiet_volume` it was granted even if it speaks at 07:00:01.
+
+The alternative -- evaluating inside the lock -- trades that for a worse
+one: a caller would then block for up to 30 seconds before being told its
+message was refused, and a refusal is precisely the answer that should
+come back immediately (ADR-015). The window is a 30-second-fuzzy boundary
+on a rule measured in hours; a refusal that takes 30 seconds to arrive is
+a bug in every automation that waits for it.
+
 ## The volume timeline
 
 `speaker.py` records an `AnnouncementTimeline` for every announcement:
