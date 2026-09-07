@@ -465,8 +465,12 @@ Two entries can legitimately share a title, and a service name has to be
 unique, so duplicates are numbered `_2`, `_3`, ... The first entry set up
 keeps the plain slug; the next one to want the same slug takes the first
 free number. Ignored entries are skipped (they never set up, so they
-never own a service); disabled ones are counted, so enabling or disabling
-an entry cannot renumber its neighbours.
+never own a service). A name is deterministic once frozen: nothing
+another entry does afterwards -- being deleted, enabled, disabled or
+renamed -- can move it. The one-time numbering handed out before that,
+to entries that have never frozen a name, is creation order among enabled
+entries, and can depend on setup order when a disabled entry sharing the
+same title sits in the middle of that creation order.
 
 **The result is frozen in `entry.data`** (`service_name`, plus the
 `service_name_base` it was derived from) the first time the entry is set
@@ -476,7 +480,11 @@ what makes the assignment survive a restart, an upgrade, and anything the
 *other* entries do: deleting the entry that held the plain slug no longer
 promotes its neighbour, and Home Assistant setting a domain's entries up
 concurrently (`homeassistant/setup.py`, `asyncio.gather` over
-`entry.async_setup_locked`) cannot shuffle them either.
+`entry.async_setup_locked`) cannot shuffle them either. The freeze binds
+this integration to itself, not to core: a frozen name that a *foreign*
+integration has since started serving (`_is_foreign_service`) is dropped
+and recomputed at the entry's next setup, consistent with
+[ADR-0001](ADR/0001-frozen-service-name.md).
 
 A recomputed name skips every name another entry has claimed -- whether
 that entry is loaded (`hass.data[SERVICE_OWNERS]`) or merely stored
@@ -491,8 +499,11 @@ service on unload. For the same reason the unload callback removes
 the owner.
 
 An entry created before 0.2.0 has no stored name; the first setup after
-the upgrade picks one -- in creation order, so several such entries come
-out the same whichever of them is set up first -- and freezes it.
+the upgrade picks one -- creation order among the enabled entries that
+share a base, none of them frozen yet -- and freezes it. That one-time
+numbering can depend on setup order when a disabled entry with the same
+title sits in the middle of the creation order; once frozen, a name is
+deterministic regardless of what happens around it.
 
 This was a breaking change in 0.2.0, with no alias for the old names: an
 integration answering to two names is one nobody can reason about, and

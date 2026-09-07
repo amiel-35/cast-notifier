@@ -8,7 +8,7 @@ Each config entry owns one legacy `notify.<name>` service. The name is
 derived from the entry title -- `slugify(title)`, prefixed `cast_` -- so
 that what the user renames in the UI is what the service is called.
 
-Titles are not unique. Two Sonos speakers can both be called "Speaker",
+Titles are not unique. Two Nest speakers can both be called "Speaker",
 and two entries would then want `notify.cast_speaker`. Duplicates are
 therefore numbered: `cast_speaker`, `cast_speaker_2`, `cast_speaker_3`.
 
@@ -52,9 +52,12 @@ it was derived from as `service_name_base`.
 - The starting number for an entry that has no stored name is its rank,
   in creation order, among the entries wanting the same base and not yet
   frozen. `hass.config_entries.async_entries` is insertion-ordered
-  (`ConfigEntryItems` in `homeassistant/config_entries.py`), so an
-  upgrade from 0.1.x -- several entries at once, none of them frozen --
-  comes out the same whichever one core happens to set up first.
+  (`ConfigEntryItems` in `homeassistant/config_entries.py`). A name is
+  deterministic once frozen; the one-time upgrade numbering -- several
+  entries at once, none of them frozen, as after an upgrade from 0.1.x --
+  is creation order among enabled entries, and can depend on setup order
+  when a disabled entry sharing the same title sits in the middle of that
+  creation order.
 - On unload, an entry retracts **only** the name `SERVICE_OWNERS`
   attributes to it. Removing `notify.<name>` by name alone would let one
   entry retract another's service, and core -- which never registered a

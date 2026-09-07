@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_3`, ..., and each entry's name is then frozen in its config entry, so
   nothing another entry does -- being deleted, disabled or renamed -- can
   move it. A rename onto a title another entry already uses takes the
-  next free number instead of that entry's service.
+  next free number instead of that entry's service. A frozen name that a
+  foreign integration has since started serving is dropped and
+  recomputed at the entry's next setup.
 
   Renaming an entry now renames its service, with no restart. There is
   deliberately **no alias** for the old names: update your automations,

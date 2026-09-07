@@ -76,6 +76,18 @@ The new name is visible in Developer tools -> Actions under `notify`, and
 in the entry's diagnostics as `service_name`. Give two players two
 different titles and the situation never arises.
 
+A second case needs a disabled entry. Renaming a **disabled** entry away
+from a title does not update its stored `service_name`: the update
+listener that would recompute it is only registered during setup, and a
+disabled entry never sets up, so the stale name sits in `entry.data`
+untouched. If another entry is then renamed *onto* the old title, it
+finds that stale name still "taken" and gets `_2` instead of the plain
+slug -- even though nothing visibly answers to the plain name any more.
+The plain name becomes free again as soon as the disabled entry is
+re-enabled and sets up, which recomputes its (now different) name and
+drops the stale one. This self-heals on the next rename of the entry
+stuck on `_2`: recomputing then finds the plain name free and takes it.
+
 ## A quiet-hours refusal is invisible unless the caller waits
 
 Like every other refusal, a message blocked by quiet hours raises

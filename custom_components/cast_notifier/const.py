@@ -13,8 +13,9 @@ CONF_MEDIA_PLAYER: Final = "media_player"
 # The `notify.<name>` service this entry owns, and the `cast_<slug>` base
 # it was derived from. Frozen the first time the entry is set up and only
 # recomputed when the base no longer matches the entry title, so that a
-# name never moves because of something another entry did. Absent from
-# entries created before 0.2.0.
+# name never moves because of something another entry did. Also recomputed
+# if a foreign integration has since started serving the frozen name.
+# Absent from entries created before 0.2.0.
 CONF_SERVICE_NAME: Final = "service_name"
 CONF_SERVICE_NAME_BASE: Final = "service_name_base"
 
