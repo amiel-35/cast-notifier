@@ -454,3 +454,52 @@ async def test_a_disabled_entry_still_reserves_its_number(
 
     assert second.runtime_data.service_name == "cast_speaker_2"
     assert SERVICE_NAME_KEY not in first.data
+
+
+async def test_a_frozen_name_is_dropped_when_something_else_serves_it(
+    hass: HomeAssistant,
+) -> None:
+    """A stored name another integration now serves is not reused.
+
+    The freeze exists so that nothing *another Cast Notifier entry* does
+    can move a name. It was never meant to override core: while this
+    entry was unloaded, a foreign integration registered
+    `notify.cast_kitchen`, and
+    `notify/legacy.py::BaseNotificationService.async_register_services`
+    returns early when the name is already taken (2026.9.1, line 312).
+    Reusing the stored name verbatim would leave this entry LOADED and
+    mute, and its unload would delete the other integration's service.
+
+    So the stored name is checked against the same foreign-service test a
+    fresh name goes through: it fails, the entry recomputes to
+    `cast_kitchen_2`, and persists that.
+    """
+
+    async def _foreign(call: Any) -> None:
+        """Stand in for another integration's notify service."""
+
+    _set_player(hass, MEDIA_PLAYER)
+    entry = _entry(title="Kitchen")
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.data[SERVICE_NAME_KEY] == "cast_kitchen"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.services.async_register("notify", "cast_kitchen", _foreign)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.runtime_data.service_name == "cast_kitchen_2"
+    assert entry.data[SERVICE_NAME_KEY] == "cast_kitchen_2"
+    assert hass.services.has_service("notify", "cast_kitchen_2")
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.services.has_service("notify", "cast_kitchen")
+    assert not hass.services.has_service("notify", "cast_kitchen_2")
