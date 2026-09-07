@@ -298,7 +298,12 @@ class CastNotifierOptionsFlow(OptionsFlow):
 
         defaults = dict(self.config_entry.options)
         schema = _options_schema(self.hass, defaults)
+        # Re-showing the form after an error: keep everything that was
+        # typed, exactly as the user step does. The schema's own defaults
+        # come from the *stored* options, so suggesting only the two
+        # quiet-hours fields meant every other edit in the same
+        # submission was silently rolled back to what it had been.
         schema = self.add_suggested_values_to_schema(
-            schema, _suggested_values(user_input if user_input else defaults)
+            schema, user_input if user_input else _suggested_values(defaults)
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

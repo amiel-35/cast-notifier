@@ -206,6 +206,10 @@ STEP_VOLUME_REQUESTED: Final = "volume_requested"
 STEP_VOLUME_AFTER_SET: Final = "volume_after_set"
 STEP_VOLUME_WHILE_PLAYING: Final = "volume_while_playing"
 STEP_VOLUME_RESTORED: Final = "volume_restored"
+# Recorded instead of `volume_restored` when `media_player.volume_set`
+# refused to put the volume back: the value is what the player is left
+# at, which is the number an operator needs.
+STEP_VOLUME_RESTORE_FAILED: Final = "volume_restore_failed"
 
 
 @dataclass(slots=True)
@@ -310,6 +314,7 @@ class CastSpeaker:
         # names a volume has said something about *this* message, which
         # beats a rule about this time of day.
         volume: float | None = data.get(DATA_VOLUME)
+        speaking_quietly = volume is None and quiet_volume is not None
         if volume is None:
             volume = quiet_volume
         if volume is None:
@@ -339,6 +344,21 @@ class CastSpeaker:
             and not self._has_feature(MediaPlayerEntityFeature.MEDIA_ANNOUNCE)
             and self._has_feature(MediaPlayerEntityFeature.VOLUME_SET)
         )
+
+        if speaking_quietly and not manage_volume:
+            # Not a refusal: a notifier that goes mute at night because
+            # the speaker has a fixed output is worse than one that is
+            # too loud. But the entry asked for something that is not
+            # happening, and only a warning can say so -- the volume is
+            # not managed, so nothing else in this call will mention it.
+            _LOGGER.warning(
+                "quiet_volume could not be applied on %s: this player's volume "
+                "is not managed by Cast Notifier (no volume_set support, or it "
+                "handles announcements itself). Speaking at %s instead of %s",
+                self.config.media_player,
+                self._current_volume(),
+                volume,
+            )
 
         timeline.record(STEP_VOLUME_BEFORE, self._current_volume())
 
@@ -375,8 +395,17 @@ class CastSpeaker:
                     if spoke and previous_fingerprint is not None:
                         await self._async_wait_for_playback_end(previous_fingerprint)
                     if self.config.restore_volume and previous_volume is not None:
-                        await self._async_set_volume(previous_volume)
-                        timeline.record(STEP_VOLUME_RESTORED, self._current_volume())
+                        # Two distinct steps, never both: a restore that
+                        # did not happen used to read the volume back and
+                        # record it as `volume_restored`, which is exactly
+                        # the reading someone would trust when asking why
+                        # a speaker is stuck at announcement volume.
+                        step = (
+                            STEP_VOLUME_RESTORED
+                            if await self._async_set_volume(previous_volume)
+                            else STEP_VOLUME_RESTORE_FAILED
+                        )
+                        timeline.record(step, self._current_volume())
             finally:
                 unsub_observer()
 

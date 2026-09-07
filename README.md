@@ -194,8 +194,9 @@ matching is case-insensitive.
 **"Why was that announcement so loud?"** Every announcement records five
 volume readings, timestamped: what the player was at before, what Cast
 Notifier asked for, what the player reported once `volume_set` returned,
-what it reported while it was actually `playing`, and what it was left at.
-Two ways to read them:
+what it reported while it was actually `playing`, and what it was left at
+(`volume_restored`, or `volume_restore_failed` when the player refused to
+take its old volume back). Two ways to read them:
 
 - Settings -> Devices & services -> Cast Notifier -> the three-dot menu on
   the entry -> **Download diagnostics**. The `last_announcement` section

@@ -280,6 +280,12 @@ exposed through the entry's diagnostics as `last_announcement`.
 | `volume_after_set` | what the state attribute said once `volume_set` returned |
 | `volume_while_playing` | what the player reported while it was `playing` |
 | `volume_restored` | what it was left at |
+| `volume_restore_failed` | recorded instead, when the restore was refused |
+
+The last two are exclusive: an announcement records one or the other, so
+a speaker left at announcement volume says so instead of reporting a
+restore that never happened (`media_player.volume_set` failing is
+reported, not raised -- see "Two gates before any volume is touched").
 
 The fourth is the one that does not exist anywhere else. `volume_set`
 returning, and the attribute just after it, both describe what Home
