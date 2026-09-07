@@ -262,10 +262,60 @@ async def test_a_critical_message_is_not_refused_at_night(
 
     speaker = CastSpeaker(hass, _config(**NIGHT))
     await speaker.async_speak(
-        SpeakRequest(message="Water leak", data={"priority": "CRITICAL"})
+        SpeakRequest(message="Water leak", data={"priority": "critical"})
     )
 
     assert len(speak_calls) == 1
+
+
+@pytest.mark.parametrize("priority", ["info", "normal", "high", "critical"])
+async def test_every_priority_in_the_vocabulary_is_accepted(
+    hass: HomeAssistant, priority: str
+) -> None:
+    """The four documented values pass validation and are spoken.
+
+    Only `critical` does anything -- it bypasses quiet hours -- but the
+    other three are part of the contract and must not be refused: they
+    are what a wider notification layer puts in the payload it fans out.
+    This entry has no quiet window, so all four simply speak.
+    """
+    _set_player(hass)
+    speak_calls = async_mock_service(hass, "tts", "speak")
+
+    speaker = CastSpeaker(hass, _config())
+    await speaker.async_speak(
+        SpeakRequest(message="Hello", data={"priority": priority})
+    )
+
+    assert len(speak_calls) == 1
+
+
+@pytest.mark.parametrize("priority", ["CRITICAL", "urgent", 3, ""])
+async def test_a_priority_outside_the_vocabulary_is_invalid_data(
+    hass: HomeAssistant, priority: Any
+) -> None:
+    """Matching is exact: no casefolding, no coercion, no free text.
+
+    `"CRITICAL"` is the one that matters. It used to bypass quiet hours,
+    because the comparison casefolded -- so a caller could get a 3am
+    announcement out of a payload Cast Notifier had never agreed to
+    understand. A vocabulary that accepts one spelling and silently
+    ignores its neighbours is worse than one that refuses both: the
+    caller learns nothing. `3` and `""` are here for the same reason --
+    `cv.string` used to coerce the first and accept the second.
+    """
+    _set_player(hass)
+    speak_calls = async_mock_service(hass, "tts", "speak")
+
+    speaker = CastSpeaker(hass, _config())
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await speaker.async_speak(
+            SpeakRequest(message="Hello", data={"priority": priority})
+        )
+
+    assert raised.value.translation_key == "invalid_data"
+    assert len(speak_calls) == 0
 
 
 async def test_a_non_critical_priority_does_not_bypass(
