@@ -30,6 +30,7 @@ from homeassistant.const import CONF_NAME, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import discovery
 from homeassistant.util import slugify
+from homeassistant.util.hass_dict import HassKey
 
 from .const import (
     CONF_ANNOUNCE_PREFIX,
@@ -40,6 +41,8 @@ from .const import (
     CONF_QUIET_START,
     CONF_QUIET_VOLUME,
     CONF_RESTORE_VOLUME,
+    CONF_SERVICE_NAME,
+    CONF_SERVICE_NAME_BASE,
     CONF_TTS_ENTITY,
     CONF_VOICE,
     CONF_VOLUME,
@@ -50,6 +53,13 @@ from .const import (
 from .speaker import CastSpeaker, CastSpeakerConfig
 
 PLATFORMS: list[Platform] = [Platform.NOTIFY]
+
+# Which entry owns which `notify.*` service name, for as long as that entry
+# is set up. The name a *stopped* entry owns lives in its `entry.data`
+# instead (`CONF_SERVICE_NAME`); this map is what keeps two entries setting
+# up in the same event loop iteration from claiming one name, and what the
+# unload callback checks before removing a service it may no longer own.
+SERVICE_OWNERS: HassKey[dict[str, str]] = HassKey(f"{DOMAIN}_service_owners")
 
 
 @dataclass(slots=True)
@@ -98,30 +108,131 @@ def _base_service_name(entry: CastNotifierConfigEntry) -> str:
     return f"cast_{slug}"
 
 
-def _service_name(hass: HomeAssistant, entry: CastNotifierConfigEntry) -> str:
-    """Return the `notify.*` service name this entry should own.
+@callback
+def _async_service_name(hass: HomeAssistant, entry: CastNotifierConfigEntry) -> str:
+    """Return the `notify.*` service name this entry owns, freezing it.
 
     Two players can legitimately be called the same thing, and a service
     name has to be unique, so a duplicate slug is suffixed `_2`, `_3`, ...
-    The order is the order Home Assistant stores the entries in
-    (`hass.config_entries.async_entries`, backed by the insertion-ordered
-    `ConfigEntryItems` in `homeassistant/config_entries.py`), i.e.
-    creation order: the entry created first keeps the plain slug, and the
-    assignment is the same on every restart and every reload.
+    Which entry gets which suffix is decided **once**, the first time the
+    entry is set up, and written to `entry.data`: from then on the name is
+    reused verbatim, and only a change of the entry title (i.e. of the
+    slug the name is derived from) can move it.
 
-    Ignored entries are skipped -- they never set up, so they never own a
-    service -- but disabled ones are counted, so enabling or disabling an
-    entry does not silently renumber its neighbours.
+    That is the whole point. A name recomputed from the entry list on
+    every setup moves under an entry that did not change -- deleting the
+    first of two entries titled "Speaker" used to promote the second from
+    `cast_speaker_2` to `cast_speaker` -- and, worse, can land on a name
+    another entry already registered:
+    `notify/legacy.py::BaseNotificationService.async_register_services`
+    returns early when `hass.services.has_service(DOMAIN,
+    self._service_name)` is already true (2026.9.1, line 312), so the
+    second claimant registers nothing at all while believing it owns the
+    service, and retracting it on unload would silence the first.
+
+    A frozen name also makes the assignment independent of setup order,
+    which matters because Home Assistant sets a domain's entries up
+    concurrently (`homeassistant/setup.py`, `asyncio.gather` over
+    `entry.async_setup_locked`).
+
+    This is a `callback`: the ownership claim and the `entry.data` write
+    happen without an await between them, so two entries setting up in
+    the same event loop iteration cannot both claim one name.
     """
-    seen: dict[str, int] = {}
-    for candidate in hass.config_entries.async_entries(DOMAIN, include_ignore=False):
-        base = _base_service_name(candidate)
-        count = seen[base] = seen.get(base, 0) + 1
-        if candidate.entry_id == entry.entry_id:
-            return base if count == 1 else f"{base}_{count}"
-    # Not registered with Home Assistant (a bare entry in a unit test):
-    # there is nothing to collide with either.
-    return _base_service_name(entry)
+    base = _base_service_name(entry)
+    owners = hass.data.setdefault(SERVICE_OWNERS, {})
+    stored = entry.data.get(CONF_SERVICE_NAME)
+    if (
+        isinstance(stored, str)
+        and stored
+        and entry.data.get(CONF_SERVICE_NAME_BASE) == base
+        and stored not in _taken_service_names(hass, entry)
+    ):
+        owners[stored] = entry.entry_id
+        return stored
+
+    name = _free_service_name(hass, entry, base)
+    owners[name] = entry.entry_id
+    # An entry Home Assistant does not know about (a bare `MockConfigEntry`
+    # in a unit test) cannot be updated, and has nothing to persist for.
+    if hass.config_entries.async_get_entry(entry.entry_id) is not None:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                **entry.data,
+                CONF_SERVICE_NAME: name,
+                CONF_SERVICE_NAME_BASE: base,
+            },
+        )
+    return name
+
+
+def _taken_service_names(
+    hass: HomeAssistant, entry: CastNotifierConfigEntry
+) -> set[str]:
+    """Return the names other entries of this integration have claimed.
+
+    Both halves matter: `entry.data` covers entries that are not loaded
+    (disabled, failed, or simply not set up yet) and would otherwise look
+    free, and `hass.data[SERVICE_OWNERS]` covers a loaded entry whose name
+    was claimed in this same event loop iteration, before its write to
+    `entry.data` could be seen.
+    """
+    taken = {
+        name
+        for other in hass.config_entries.async_entries(DOMAIN, include_ignore=False)
+        if other.entry_id != entry.entry_id
+        and isinstance(name := other.data.get(CONF_SERVICE_NAME), str)
+    }
+    taken.update(
+        name
+        for name, owner in hass.data.get(SERVICE_OWNERS, {}).items()
+        if owner != entry.entry_id
+    )
+    return taken
+
+
+def _free_service_name(
+    hass: HomeAssistant, entry: CastNotifierConfigEntry, base: str
+) -> str:
+    """Pick a name for an entry that does not have a usable one yet.
+
+    The starting point is the entry's rank, in creation order, among the
+    entries that want the same base and have not frozen a name yet
+    (`hass.config_entries.async_entries` is insertion-ordered, backed by
+    `ConfigEntryItems` in `homeassistant/config_entries.py`). That is what
+    makes an upgrade from 0.1.x -- several entries at once, none of them
+    with a stored name -- come out the same whichever of them Home
+    Assistant happens to set up first, and it counts entries that are
+    disabled, so enabling or disabling one does not renumber its
+    neighbours. Ignored entries never set up and never own a service, so
+    they are skipped.
+
+    Names another entry has claimed are then skipped, and so are names a
+    *different integration* already serves: core would refuse to register
+    over one of those (see `_async_service_name`), leaving this entry mute
+    and its unload deleting somebody else's service.
+    """
+    taken = _taken_service_names(hass, entry)
+    rank = 1
+    for other in hass.config_entries.async_entries(DOMAIN, include_ignore=False):
+        if other.entry_id == entry.entry_id:
+            break
+        if CONF_SERVICE_NAME not in other.data and _base_service_name(other) == base:
+            rank += 1
+
+    name = base if rank == 1 else f"{base}_{rank}"
+    while name in taken or _is_foreign_service(hass, name):
+        rank += 1
+        name = f"{base}_{rank}"
+    return name
+
+
+def _is_foreign_service(hass: HomeAssistant, name: str) -> bool:
+    """Return whether `notify.<name>` is served by something else."""
+    return hass.services.has_service(NOTIFY_DOMAIN, name) and name not in hass.data.get(
+        SERVICE_OWNERS, {}
+    )
 
 
 def _build_speaker_config(entry: CastNotifierConfigEntry) -> CastSpeakerConfig:
@@ -150,7 +261,7 @@ async def async_setup_entry(
 ) -> bool:
     """Set up Cast Notifier from a config entry."""
     speaker = CastSpeaker(hass, _build_speaker_config(entry))
-    service_name = _service_name(hass, entry)
+    service_name = _async_service_name(hass, entry)
     runtime_data = CastNotifierRuntimeData(speaker=speaker, service_name=service_name)
     entry.runtime_data = runtime_data
 
@@ -180,8 +291,15 @@ async def async_setup_entry(
         service by name is synchronous, and correct either way.
         """
         runtime_data.unloaded = True
-        if hass.services.has_service(NOTIFY_DOMAIN, service_name):
-            hass.services.async_remove(NOTIFY_DOMAIN, service_name)
+        # Only ever the service this entry owns. Removing `notify.<name>`
+        # by name alone would let one entry retract another's service --
+        # and core, which never registered a second service under that
+        # name, would leave the other entry LOADED and mute.
+        owners = hass.data.get(SERVICE_OWNERS, {})
+        if owners.get(service_name) == entry.entry_id:
+            del owners[service_name]
+            if hass.services.has_service(NOTIFY_DOMAIN, service_name):
+                hass.services.async_remove(NOTIFY_DOMAIN, service_name)
         services = hass.data.get(NOTIFY_SERVICES, {}).get(DOMAIN)
         instance = runtime_data.legacy_service
         if services is not None and instance is not None and instance in services:

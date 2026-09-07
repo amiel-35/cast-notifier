@@ -55,19 +55,26 @@ Note that this is about the *player's* entity id, not the entry's title.
 Renaming the **entry** is supported and, since 0.2.0, renames its
 `notify.cast_<name>` service with it.
 
-## Deleting one of two entries that share a title renames the other
+## A renamed entry can end up with a numbered service name
 
 Since 0.2.0 the service name comes from the entry title, and duplicates
-are numbered in creation order: two entries titled "Speaker" own
-`notify.cast_speaker` and `notify.cast_speaker_2`. Delete the first, and
-the second becomes `notify.cast_speaker` on the next reload -- silently,
-because from its point of view nothing about it changed.
+are numbered: two entries titled "Speaker" own `notify.cast_speaker` and
+`notify.cast_speaker_2`. Each entry's name is then frozen in its
+`entry.data`, so nothing another entry does can move it -- deleting the
+first of those two leaves the second on `notify.cast_speaker_2`.
 
-That is the cost of a name derived from something the user controls, and
-it is preferred to the alternative (a name derived from the player's
-entity id, which nobody could predict from the UI -- the bug this
-replaced). Give two players two different titles and the situation never
-arises.
+The one case where a rename does not give the obvious name is a rename
+*onto* a title another entry already uses: rename "Kitchen" to "Dining"
+while another entry is already called "Dining", and the renamed entry
+gets `notify.cast_dining_2`, not `notify.cast_dining`. The alternative --
+taking the name -- is not an option: core registers nothing when the name
+is already in use (`homeassistant/components/notify/legacy.py:312`), so
+the renamed entry would be mute while believing otherwise, and would
+delete the other entry's service when unloaded.
+
+The new name is visible in Developer tools -> Actions under `notify`, and
+in the entry's diagnostics as `service_name`. Give two players two
+different titles and the situation never arises.
 
 ## A quiet-hours refusal is invisible unless the caller waits
 

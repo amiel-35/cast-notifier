@@ -6,10 +6,17 @@ from typing import Final
 
 DOMAIN: Final = "cast_notifier"
 
-# Config entry data keys (immutable identity of the entry: the player it
-# speaks on). Everything else lives in `entry.options` and is editable
-# through the options flow.
+# Config entry data keys. Not user-editable: the player the entry speaks
+# on, and the service name it owns. Everything else lives in
+# `entry.options` and is editable through the options flow.
 CONF_MEDIA_PLAYER: Final = "media_player"
+# The `notify.<name>` service this entry owns, and the `cast_<slug>` base
+# it was derived from. Frozen the first time the entry is set up and only
+# recomputed when the base no longer matches the entry title, so that a
+# name never moves because of something another entry did. Absent from
+# entries created before 0.2.0.
+CONF_SERVICE_NAME: Final = "service_name"
+CONF_SERVICE_NAME_BASE: Final = "service_name_base"
 
 # Config entry option keys.
 CONF_TTS_ENTITY: Final = "tts_entity"

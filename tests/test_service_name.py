@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.media_player import MediaPlayerEntityFeature
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -426,3 +426,31 @@ async def test_a_notify_service_owned_by_something_else_is_left_alone(
 
     assert hass.services.has_service("notify", "cast_kitchen")
     assert not hass.services.has_service("notify", "cast_kitchen_2")
+
+
+async def test_a_disabled_entry_still_reserves_its_number(
+    hass: HomeAssistant,
+) -> None:
+    """Disabling an entry does not renumber the ones created after it.
+
+    A disabled entry never sets up, so it never registers a service and
+    never freezes a name -- but it is still in the entry list, and
+    enabling it again would hand it the plain slug. Counting it keeps the
+    numbering the same whether or not it is switched on.
+    """
+    _set_player(hass, "media_player.upstairs")
+    _set_player(hass, "media_player.downstairs")
+
+    first = _entry("media_player.upstairs", title="Speaker")
+    first.add_to_hass(hass)
+    await hass.config_entries.async_set_disabled_by(
+        first.entry_id, ConfigEntryDisabler.USER
+    )
+    second = _entry("media_player.downstairs", title="Speaker")
+    second.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(second.entry_id)
+    await hass.async_block_till_done()
+
+    assert second.runtime_data.service_name == "cast_speaker_2"
+    assert SERVICE_NAME_KEY not in first.data

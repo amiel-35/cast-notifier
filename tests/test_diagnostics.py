@@ -9,6 +9,8 @@ from custom_components.cast_notifier.const import (
     CONF_DENY_DOMAINS,
     CONF_MEDIA_PLAYER,
     CONF_RESTORE_VOLUME,
+    CONF_SERVICE_NAME,
+    CONF_SERVICE_NAME_BASE,
     CONF_TTS_ENTITY,
     CONF_VOLUME,
     DOMAIN,
@@ -43,7 +45,14 @@ async def test_diagnostics_report_entry_and_speaker_config(
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
 
-    assert diagnostics["data"] == {CONF_MEDIA_PLAYER: MEDIA_PLAYER}
+    assert diagnostics["data"] == {
+        CONF_MEDIA_PLAYER: MEDIA_PLAYER,
+        # Frozen by the first setup, and reported: "which service is this
+        # entry supposed to own" is the first question a bug report about
+        # a missing notifier has to answer.
+        CONF_SERVICE_NAME: "cast_kitchen",
+        CONF_SERVICE_NAME_BASE: "cast_kitchen",
+    }
     assert diagnostics["options"][CONF_TTS_ENTITY] == "tts.demo"
     assert diagnostics["speaker_config"]["media_player"] == MEDIA_PLAYER
     assert diagnostics["speaker_config"]["volume"] == 0.5

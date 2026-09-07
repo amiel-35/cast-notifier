@@ -414,7 +414,7 @@ find. A test pins the entity's friendly name to its device's.
 ### The legacy service name
 
 `notify.cast_<slugify(entry.title)>`, resolved in `__init__.py`
-(`_base_service_name` / `_service_name`) and handed to the legacy
+(`_base_service_name` / `_async_service_name`) and handed to the legacy
 platform as `CONF_NAME` in the discovery payload, which
 `notify/legacy.py::async_setup_legacy.async_setup_platform` slugifies
 again into the final service name.
@@ -434,15 +434,37 @@ Renaming the entry therefore renames the service, with no restart:
 retracts the old service and registers the new one.
 
 Two entries can legitimately share a title, and a service name has to be
-unique, so duplicates are numbered `_2`, `_3`, ... in the order
-`hass.config_entries.async_entries(DOMAIN)` returns them -- insertion
-order, i.e. creation order, stable across restarts. The first entry
-created keeps the plain slug. Ignored entries are skipped (they never set
-up, so they never own a service); disabled ones are counted, so enabling
-or disabling an entry cannot silently renumber its neighbours. Deleting
-the entry that held a plain slug *does* promote the next one on the
-following reload, which is the price of a name derived from something the
-user controls.
+unique, so duplicates are numbered `_2`, `_3`, ... The first entry set up
+keeps the plain slug; the next one to want the same slug takes the first
+free number. Ignored entries are skipped (they never set up, so they
+never own a service); disabled ones are counted, so enabling or disabling
+an entry cannot renumber its neighbours.
+
+**The result is frozen in `entry.data`** (`service_name`, plus the
+`service_name_base` it was derived from) the first time the entry is set
+up, and reused verbatim from then on. Only a change of title -- which
+changes the base -- makes the integration compute a name again. This is
+what makes the assignment survive a restart, an upgrade, and anything the
+*other* entries do: deleting the entry that held the plain slug no longer
+promotes its neighbour, and Home Assistant setting a domain's entries up
+concurrently (`homeassistant/setup.py`, `asyncio.gather` over
+`entry.async_setup_locked`) cannot shuffle them either.
+
+A recomputed name skips every name another entry has claimed -- whether
+that entry is loaded (`hass.data[SERVICE_OWNERS]`) or merely stored
+(`entry.data`) -- and every `notify.*` name a *different* integration
+already serves. It has to: `BaseNotificationService.async_register_services`
+returns early when `hass.services.has_service(DOMAIN, self._service_name)`
+is already true (`homeassistant/components/notify/legacy.py:312`,
+2026.9.1). An entry that claimed a name someone else had would register
+nothing at all, believe it owned the service anyway, and delete that
+service on unload. For the same reason the unload callback removes
+`notify.<name>` only when `hass.data[SERVICE_OWNERS]` says this entry is
+the owner.
+
+An entry created before 0.2.0 has no stored name; the first setup after
+the upgrade picks one -- in creation order, so several such entries come
+out the same whichever of them is set up first -- and freezes it.
 
 This was a breaking change in 0.2.0, with no alias for the old names: an
 integration answering to two names is one nobody can reason about, and
