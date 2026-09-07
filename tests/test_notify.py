@@ -38,16 +38,19 @@ def _entry(**option_overrides: object) -> MockConfigEntry:
     options.update(option_overrides)
     return MockConfigEntry(
         domain=DOMAIN,
+        # `notify.cast_kitchen` is derived from this title, not from the
+        # player's entity id (see tests/test_service_name.py).
+        title="Kitchen",
         unique_id=MEDIA_PLAYER,
         data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
         options=options,
     )
 
 
-async def test_setup_registers_legacy_service_named_after_the_player(
+async def test_setup_registers_legacy_service_named_after_the_entry(
     hass: HomeAssistant,
 ) -> None:
-    """Setting up the entry registers notify.cast_<object_id>."""
+    """Setting up the entry registers notify.cast_<entry title>."""
     hass.states.async_set(MEDIA_PLAYER, "idle")
     entry = _entry()
     entry.add_to_hass(hass)

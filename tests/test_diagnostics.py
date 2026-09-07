@@ -27,6 +27,7 @@ async def test_diagnostics_report_entry_and_speaker_config(
     hass.states.async_set(MEDIA_PLAYER, "idle")
     entry = MockConfigEntry(
         domain=DOMAIN,
+        title="Kitchen",
         unique_id=MEDIA_PLAYER,
         data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
         options={
@@ -47,6 +48,9 @@ async def test_diagnostics_report_entry_and_speaker_config(
     assert diagnostics["speaker_config"]["media_player"] == MEDIA_PLAYER
     assert diagnostics["speaker_config"]["volume"] == 0.5
     assert diagnostics["service_name"] == "cast_kitchen"
+    # Nothing has been spoken yet: the timeline is there and empty, not
+    # missing (see tests/test_observability.py).
+    assert diagnostics["last_announcement"] is None
 
 
 async def test_diagnostics_survive_an_unloaded_entry(hass: HomeAssistant) -> None:
@@ -57,6 +61,7 @@ async def test_diagnostics_survive_an_unloaded_entry(hass: HomeAssistant) -> Non
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
+        title="Kitchen",
         unique_id=MEDIA_PLAYER,
         data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
         options={
@@ -73,4 +78,5 @@ async def test_diagnostics_survive_an_unloaded_entry(hass: HomeAssistant) -> Non
     assert diagnostics["loaded"] is False
     assert diagnostics["speaker_config"] is None
     assert diagnostics["service_name"] is None
+    assert diagnostics["last_announcement"] is None
     assert diagnostics["data"] == {CONF_MEDIA_PLAYER: MEDIA_PLAYER}

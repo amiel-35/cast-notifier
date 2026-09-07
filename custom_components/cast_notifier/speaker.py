@@ -16,12 +16,13 @@ the speaker is quiet again).
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 import voluptuous as vol
 from homeassistant.components.media_player.const import (
@@ -31,6 +32,7 @@ from homeassistant.components.media_player.const import (
     ATTR_MEDIA_VOLUME_LEVEL,
     DOMAIN as MEDIA_PLAYER_DOMAIN,
     MediaPlayerEntityFeature,
+    MediaPlayerState,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -41,16 +43,19 @@ from homeassistant.core import Event, EventStateChangedData, HomeAssistant, call
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ANNOUNCEMENT_START_TIMEOUT,
     ATTR_LANGUAGE as DATA_LANGUAGE,
+    ATTR_PRIORITY as DATA_PRIORITY,
     ATTR_SOURCE_ENTITY,
     ATTR_TTS_ENTITY as DATA_TTS_ENTITY,
     ATTR_VOICE as DATA_VOICE,
     ATTR_VOLUME as DATA_VOLUME,
     DOMAIN,
     PLAYBACK_TIMEOUT,
+    PRIORITY_CRITICAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,6 +95,7 @@ SPEAK_DATA_SCHEMA = vol.Schema(
         vol.Optional(DATA_TTS_ENTITY): _entity_id_in_domain(TTS_DOMAIN),
         vol.Optional(DATA_LANGUAGE): cv.string,
         vol.Optional(DATA_VOICE): vol.Any(cv.string, dict),
+        vol.Optional(DATA_PRIORITY): cv.string,
     },
     extra=vol.ALLOW_EXTRA,
 )
@@ -109,6 +115,10 @@ class CastNotifierRefused(ServiceValidationError):
 
 class CastNotifierInvalidData(ServiceValidationError):
     """Raised when a call's `data` payload does not match the contract."""
+
+
+class CastNotifierQuietHours(ServiceValidationError):
+    """Raised when a message falls inside quiet hours with no quiet volume."""
 
 
 @dataclass(slots=True)
@@ -131,6 +141,40 @@ class CastSpeakerConfig:
     restore_volume: bool = True
     announce_prefix: str | None = None
     deny_domains: list[str] = field(default_factory=list)
+    # Quiet hours. Both bounds are `HH:MM:SS` strings straight out of the
+    # options flow's `TimeSelector`, or `None` when the feature is off.
+    quiet_start: str | None = None
+    quiet_end: str | None = None
+    quiet_volume: float | None = None
+
+
+def is_within_quiet_hours(start: str | None, end: str | None, now: dt.time) -> bool:
+    """Return whether `now` falls inside the `[start, end)` quiet window.
+
+    The window is half-open, so an end of `07:00:00` means "quiet until
+    07:00, speaking from 07:00". It may cross midnight (`22:00` ->
+    `07:00`), which is the normal case for a night window, and is then
+    read as "at or after start, or before end".
+
+    Quiet hours are off -- this returns `False` -- whenever the window
+    cannot be read as a real interval: either bound missing (a
+    half-configured entry, which the options flow refuses in the first
+    place), either bound unparseable, or the two bounds equal. A
+    zero-length window is deliberately *not* read as "always quiet": a
+    user who sets the same time twice has said nothing, and silently
+    muting a notifier for 24 hours is the worst possible reading of that.
+    """
+    if not start or not end:
+        return False
+    parsed_start = dt_util.parse_time(start)
+    parsed_end = dt_util.parse_time(end)
+    if parsed_start is None or parsed_end is None:
+        return False
+    if parsed_start == parsed_end:
+        return False
+    if parsed_start < parsed_end:
+        return parsed_start <= now < parsed_end
+    return now >= parsed_start or now < parsed_end
 
 
 def _build_options(voice: str | dict[str, Any] | None) -> dict[str, Any] | None:
@@ -150,6 +194,56 @@ def _build_options(voice: str | dict[str, Any] | None) -> dict[str, Any] | None:
     except ValueError:
         return {"voice": voice}
     return parsed if isinstance(parsed, dict) else {"voice": voice}
+
+
+# The five volume readings an announcement records, in the order they are
+# taken. The first real announcement on a Nest speaker played at an
+# observed 0.55 while the entry was configured for 0.40, and the log said
+# nothing at all about it: these steps exist so that question has an
+# answer next time, from the log at DEBUG or from the entry's diagnostics.
+STEP_VOLUME_BEFORE: Final = "volume_before"
+STEP_VOLUME_REQUESTED: Final = "volume_requested"
+STEP_VOLUME_AFTER_SET: Final = "volume_after_set"
+STEP_VOLUME_WHILE_PLAYING: Final = "volume_while_playing"
+STEP_VOLUME_RESTORED: Final = "volume_restored"
+
+
+@dataclass(slots=True)
+class AnnouncementTimeline:
+    """What happened to one player's volume during one announcement.
+
+    Bounded to a single announcement on purpose: this is a diagnostic
+    aid, not a history. Each step carries a UTC timestamp as well as its
+    value, because "the volume was right but the restore came 8s late" and
+    "the volume was wrong" look identical without one.
+    """
+
+    player: str
+    started_at: str
+    steps: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self, step: str, volume: float | None) -> None:
+        """Record one reading, and log it at DEBUG."""
+        self.steps.append(
+            {
+                "step": step,
+                "at": dt_util.utcnow().isoformat(),
+                "volume": volume,
+            }
+        )
+        _LOGGER.debug("Announcement on %s: %s = %s", self.player, step, volume)
+
+    def has(self, step: str) -> bool:
+        """Return whether `step` has already been recorded."""
+        return any(recorded["step"] == step for recorded in self.steps)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable view, for diagnostics."""
+        return {
+            "player": self.player,
+            "started_at": self.started_at,
+            "steps": list(self.steps),
+        }
 
 
 # What Cast Notifier compares to decide whether an announcement is under
@@ -174,36 +268,58 @@ class CastSpeaker:
         # one already lowered it, and the second one would restore the
         # announcement volume as if it were the user's setting.
         self._lock = asyncio.Lock()
+        # The volume trace of the most recent announcement, exposed through
+        # diagnostics. One announcement only: see `AnnouncementTimeline`.
+        self.last_announcement: AnnouncementTimeline | None = None
 
     async def async_speak(self, request: SpeakRequest) -> None:
-        """Speak `request.message`, refusing it if `deny_domains` applies.
+        """Speak `request.message`, refusing it if a rule says not to.
 
         Raises `CastNotifierInvalidData` if `request.data` does not match
-        `SPEAK_DATA_SCHEMA`, and `CastNotifierRefused` if
+        `SPEAK_DATA_SCHEMA`, `CastNotifierRefused` if
         `request.data["source_entity"]` belongs to a domain in
-        `deny_domains` -- the message is never sent to `tts.speak` in
-        either case. Both are `ServiceValidationError`s that reach the
-        caller (ADR-015) as well as the log. Both checks run before the
-        per-player lock, so a refused call never queues behind an
-        announcement in progress.
+        `deny_domains`, and `CastNotifierQuietHours` if the call lands
+        inside a quiet window with no `quiet_volume` to speak it at -- the
+        message is never sent to `tts.speak` in any of the three cases.
+        All are `ServiceValidationError`s that reach the caller (ADR-015)
+        as well as the log. All three checks run before the per-player
+        lock, so a refused call never queues behind an announcement in
+        progress.
         """
         data = self._validated_data(request)
         self._enforce_deny_domains(data)
+        quiet_volume = self._enforce_quiet_hours(data)
 
         async with self._lock:
-            await self._async_speak_locked(request, data)
+            await self._async_speak_locked(request, data, quiet_volume)
 
     async def _async_speak_locked(
-        self, request: SpeakRequest, data: dict[str, Any]
+        self,
+        request: SpeakRequest,
+        data: dict[str, Any],
+        quiet_volume: float | None = None,
     ) -> None:
         """Speak one message; called with `self._lock` held."""
         message = self._effective_message(request)
         tts_entity = data.get(DATA_TTS_ENTITY) or self.config.tts_entity
         language = data.get(DATA_LANGUAGE) or self.config.language
         voice = data.get(DATA_VOICE) or self.config.voice
+        # Volume precedence, most specific first: this call's own
+        # `data.volume`, then the quiet-hours volume when the call landed
+        # in the window, then the entry's configured volume. A caller that
+        # names a volume has said something about *this* message, which
+        # beats a rule about this time of day.
         volume: float | None = data.get(DATA_VOLUME)
         if volume is None:
+            volume = quiet_volume
+        if volume is None:
             volume = self.config.volume
+
+        timeline = AnnouncementTimeline(
+            player=self.config.media_player,
+            started_at=dt_util.utcnow().isoformat(),
+        )
+        self.last_announcement = timeline
 
         # Only bother tracking playback at all if a volume needs restoring:
         # that is the one thing Cast Notifier cannot learn from `tts.speak`
@@ -224,11 +340,19 @@ class CastSpeaker:
             and self._has_feature(MediaPlayerEntityFeature.VOLUME_SET)
         )
 
+        timeline.record(STEP_VOLUME_BEFORE, self._current_volume())
+
         previous_volume: float | None = None
         previous_fingerprint: _Fingerprint | None = None
         if manage_volume and volume is not None:
+            timeline.record(STEP_VOLUME_REQUESTED, volume)
             previous_volume = self._current_volume()
             if await self._async_set_volume(volume):
+                # Read back rather than assumed: `media_player.volume_set`
+                # returning does not prove the player took the value, and
+                # a discrepancy here is exactly the kind of thing this
+                # timeline exists to show.
+                timeline.record(STEP_VOLUME_AFTER_SET, self._current_volume())
                 previous_fingerprint = self._fingerprint()
             else:
                 # The volume could not be changed; there is nothing to
@@ -241,15 +365,20 @@ class CastSpeaker:
         # permanently loud) because a message failed is the worst possible
         # failure mode for a notifier.
         spoke = False
+        unsub_observer = self._async_observe_playing_volume(timeline)
         try:
             await self._async_call_speak(tts_entity, message, language, voice)
             spoke = True
         finally:
-            if manage_volume:
-                if spoke and previous_fingerprint is not None:
-                    await self._async_wait_for_playback_end(previous_fingerprint)
-                if self.config.restore_volume and previous_volume is not None:
-                    await self._async_set_volume(previous_volume)
+            try:
+                if manage_volume:
+                    if spoke and previous_fingerprint is not None:
+                        await self._async_wait_for_playback_end(previous_fingerprint)
+                    if self.config.restore_volume and previous_volume is not None:
+                        await self._async_set_volume(previous_volume)
+                        timeline.record(STEP_VOLUME_RESTORED, self._current_volume())
+            finally:
+                unsub_observer()
 
     def _validated_data(self, request: SpeakRequest) -> dict[str, Any]:
         try:
@@ -305,6 +434,88 @@ class CastSpeaker:
                     "player": self.config.media_player,
                 },
             )
+
+    def _enforce_quiet_hours(self, data: dict[str, Any]) -> float | None:
+        """Apply the quiet window, returning the volume to speak at.
+
+        Returns `None` when quiet hours do not apply (not configured, out
+        of the window, or bypassed), and the configured `quiet_volume`
+        when the call lands inside the window and there is one. Raises
+        `CastNotifierQuietHours` when the call lands inside the window
+        with no `quiet_volume`: the entry has said "no announcements at
+        this hour", and per ADR-015 that is an error for the caller, not
+        a silent success.
+
+        `data.priority: "critical"` bypasses the window entirely, volume
+        included. A water leak at 3am is what a notifier is for, and
+        `priority` is the key the wider notification layer forwards
+        untouched, so a critical alert stays critical all the way down.
+        """
+        priority = data.get(DATA_PRIORITY)
+        if isinstance(priority, str) and priority.casefold() == PRIORITY_CRITICAL:
+            return None
+
+        now = dt_util.now().time()
+        if not is_within_quiet_hours(
+            self.config.quiet_start, self.config.quiet_end, now
+        ):
+            return None
+
+        if self.config.quiet_volume is not None:
+            return self.config.quiet_volume
+
+        # INFO, not WARNING: this is the configuration doing its job, not
+        # something going wrong. It is still logged, because a caller
+        # without `blocking: true` would otherwise have no trace at all of
+        # a message that was never spoken (ADR-015).
+        _LOGGER.info(
+            "Not speaking on %s: reason quiet_hours, window %s-%s, local time %s",
+            self.config.media_player,
+            self.config.quiet_start,
+            self.config.quiet_end,
+            now.isoformat(),
+        )
+        raise CastNotifierQuietHours(
+            translation_domain=DOMAIN,
+            translation_key="quiet_hours",
+            translation_placeholders={
+                "player": self.config.media_player,
+                "start": str(self.config.quiet_start),
+                "end": str(self.config.quiet_end),
+            },
+        )
+
+    @callback
+    def _async_observe_playing_volume(
+        self, timeline: AnnouncementTimeline
+    ) -> Callable[[], None]:
+        """Record the volume the player reports while it is `playing`.
+
+        This is the only reading that says what the announcement was
+        actually heard at. `volume_set` returning, and the state attribute
+        just after it, both describe what Home Assistant asked for; a Cast
+        device can report something else once it starts playing (0.55 for
+        a requested 0.40, on the first real announcement). Only the first
+        `playing` observation is kept, so a long clip cannot grow the
+        timeline.
+        """
+
+        @callback
+        def _on_state_change(event: Event[EventStateChangedData]) -> None:
+            new_state = event.data["new_state"]
+            if new_state is None or new_state.state != MediaPlayerState.PLAYING:
+                return
+            if timeline.has(STEP_VOLUME_WHILE_PLAYING):
+                return
+            volume = new_state.attributes.get(ATTR_MEDIA_VOLUME_LEVEL)
+            timeline.record(
+                STEP_VOLUME_WHILE_PLAYING,
+                float(volume) if volume is not None else None,
+            )
+
+        return async_track_state_change_event(
+            self.hass, [self.config.media_player], _on_state_change
+        )
 
     def _effective_message(self, request: SpeakRequest) -> str:
         prefix = self.config.announce_prefix

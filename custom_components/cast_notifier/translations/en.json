@@ -13,7 +13,10 @@
           "volume": "Volume while speaking",
           "restore_volume": "Restore previous volume after speaking",
           "announce_prefix": "Announcement prefix",
-          "deny_domains": "Never speak about these domains"
+          "deny_domains": "Never speak about these domains",
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "quiet_volume": "Volume during quiet hours"
         },
         "data_description": {
           "media_player": "The Cast (or other) media_player entity that will speak.",
@@ -23,7 +26,10 @@
           "volume": "If set, the player's volume is set to this level before speaking and restored afterwards.",
           "restore_volume": "Restore the volume the player had before speaking, once the message is done.",
           "announce_prefix": "Optional text spoken before every message, e.g. \"Attention.\"",
-          "deny_domains": "Comma-separated entity domains. A call whose data.source_entity belongs to one of them is refused and logged instead of spoken."
+          "deny_domains": "Comma-separated entity domains. A call whose data.source_entity belongs to one of them is refused and logged instead of spoken.",
+          "quiet_start": "Start of the period during which this player should stay quiet. Leave both times empty to disable quiet hours.",
+          "quiet_end": "End of that period. The window may cross midnight, for example 22:00 to 07:00.",
+          "quiet_volume": "If set, a message inside the quiet window is spoken at this volume instead of being refused. Leave it empty to refuse those messages outright. A call carrying data.priority set to critical ignores quiet hours entirely."
         }
       }
     },
@@ -31,7 +37,8 @@
       "already_configured": "This player is already configured for Cast Notifier."
     },
     "error": {
-      "player_cannot_play_media": "This player does not support play_media, so it can never speak. Pick a Cast player, or another media player that supports playing media."
+      "player_cannot_play_media": "This player does not support play_media, so it can never speak. Pick a Cast player, or another media player that supports playing media.",
+      "quiet_hours_incomplete": "Quiet hours need both a start and an end time, or neither."
     }
   },
   "options": {
@@ -46,7 +53,10 @@
           "volume": "Volume while speaking",
           "restore_volume": "Restore previous volume after speaking",
           "announce_prefix": "Announcement prefix",
-          "deny_domains": "Never speak about these domains"
+          "deny_domains": "Never speak about these domains",
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "quiet_volume": "Volume during quiet hours"
         },
         "data_description": {
           "tts_entity": "The tts.* entity used to generate speech, e.g. tts.home_assistant_cloud.",
@@ -55,9 +65,15 @@
           "volume": "If set, the player's volume is set to this level before speaking and restored afterwards.",
           "restore_volume": "Restore the volume the player had before speaking, once the message is done.",
           "announce_prefix": "Optional text spoken before every message, e.g. \"Attention.\"",
-          "deny_domains": "Comma-separated entity domains. A call whose data.source_entity belongs to one of them is refused and logged instead of spoken."
+          "deny_domains": "Comma-separated entity domains. A call whose data.source_entity belongs to one of them is refused and logged instead of spoken.",
+          "quiet_start": "Start of the period during which this player should stay quiet. Leave both times empty to disable quiet hours.",
+          "quiet_end": "End of that period. The window may cross midnight, for example 22:00 to 07:00.",
+          "quiet_volume": "If set, a message inside the quiet window is spoken at this volume instead of being refused. Leave it empty to refuse those messages outright. A call carrying data.priority set to critical ignores quiet hours entirely."
         }
       }
+    },
+    "error": {
+      "quiet_hours_incomplete": "Quiet hours need both a start and an end time, or neither."
     }
   },
   "exceptions": {
@@ -66,6 +82,9 @@
     },
     "invalid_data": {
       "message": "Cast Notifier did not speak a message on {player}: the data payload is invalid: {error}"
+    },
+    "quiet_hours": {
+      "message": "Cast Notifier did not speak a message on {player}: this player is quiet from {start} to {end}. Set a quiet-hours volume, or send the message with data.priority set to critical."
     }
   }
 }

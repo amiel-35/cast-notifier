@@ -72,7 +72,7 @@ def test_translations_match_strings_reference() -> None:
 def test_exception_keys_cover_what_the_code_raises() -> None:
     """`strings.json` declares every `translation_key` the speaker raises."""
     exceptions = _load("strings")["exceptions"]
-    assert set(exceptions) == {"message_refused", "invalid_data"}
+    assert set(exceptions) == {"message_refused", "invalid_data", "quiet_hours"}
 
 
 def test_exception_placeholders_are_identical_across_languages() -> None:

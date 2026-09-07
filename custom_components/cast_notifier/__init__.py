@@ -29,12 +29,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import discovery
+from homeassistant.util import slugify
 
 from .const import (
     CONF_ANNOUNCE_PREFIX,
     CONF_DENY_DOMAINS,
     CONF_LANGUAGE,
     CONF_MEDIA_PLAYER,
+    CONF_QUIET_END,
+    CONF_QUIET_START,
+    CONF_QUIET_VOLUME,
     CONF_RESTORE_VOLUME,
     CONF_TTS_ENTITY,
     CONF_VOICE,
@@ -69,16 +73,55 @@ class CastNotifierRuntimeData:
 type CastNotifierConfigEntry = ConfigEntry[CastNotifierRuntimeData]
 
 
-def _service_name(media_player: str) -> str:
-    """Derive the `notify.cast_<name>` service name from an entity ID.
+def _base_service_name(entry: CastNotifierConfigEntry) -> str:
+    """Derive `cast_<name>` from a config entry's title.
+
+    The title is what the user sees and can rename, which the
+    `media_player` entity id is not: a player that Home Assistant had to
+    auto-suffix (`media_player.kitchen_2`) used to produce
+    `notify.cast_kitchen_2` for an entry titled "Kitchen", a name nothing
+    in the UI could have predicted.
 
     `notify/legacy.py::async_setup_legacy.async_setup_platform` slugifies
     whatever is passed as `CONF_NAME` in the discovery payload into the
-    final service name, so this only needs to produce a readable object id
-    (e.g. `media_player.kitchen` -> `cast_kitchen`).
+    final service name, so slugifying here is belt and braces -- but it is
+    also what lets this module know the name it will get, which is what
+    the unload callback needs to retract it.
+
+    A title with nothing sluggable in it (`"!!!"`) would give
+    `notify.cast_`, which no automation can call, so the player's object
+    id is the fallback.
     """
-    object_id = media_player.split(".", 1)[-1]
-    return f"cast_{object_id}"
+    slug = slugify(entry.title)
+    if not slug:
+        slug = slugify(entry.data[CONF_MEDIA_PLAYER].split(".", 1)[-1])
+    return f"cast_{slug}"
+
+
+def _service_name(hass: HomeAssistant, entry: CastNotifierConfigEntry) -> str:
+    """Return the `notify.*` service name this entry should own.
+
+    Two players can legitimately be called the same thing, and a service
+    name has to be unique, so a duplicate slug is suffixed `_2`, `_3`, ...
+    The order is the order Home Assistant stores the entries in
+    (`hass.config_entries.async_entries`, backed by the insertion-ordered
+    `ConfigEntryItems` in `homeassistant/config_entries.py`), i.e.
+    creation order: the entry created first keeps the plain slug, and the
+    assignment is the same on every restart and every reload.
+
+    Ignored entries are skipped -- they never set up, so they never own a
+    service -- but disabled ones are counted, so enabling or disabling an
+    entry does not silently renumber its neighbours.
+    """
+    seen: dict[str, int] = {}
+    for candidate in hass.config_entries.async_entries(DOMAIN, include_ignore=False):
+        base = _base_service_name(candidate)
+        count = seen[base] = seen.get(base, 0) + 1
+        if candidate.entry_id == entry.entry_id:
+            return base if count == 1 else f"{base}_{count}"
+    # Not registered with Home Assistant (a bare entry in a unit test):
+    # there is nothing to collide with either.
+    return _base_service_name(entry)
 
 
 def _build_speaker_config(entry: CastNotifierConfigEntry) -> CastSpeakerConfig:
@@ -96,6 +139,9 @@ def _build_speaker_config(entry: CastNotifierConfigEntry) -> CastSpeakerConfig:
             domain.casefold()
             for domain in options.get(CONF_DENY_DOMAINS, DEFAULT_DENY_DOMAINS)
         ],
+        quiet_start=options.get(CONF_QUIET_START),
+        quiet_end=options.get(CONF_QUIET_END),
+        quiet_volume=options.get(CONF_QUIET_VOLUME),
     )
 
 
@@ -104,7 +150,7 @@ async def async_setup_entry(
 ) -> bool:
     """Set up Cast Notifier from a config entry."""
     speaker = CastSpeaker(hass, _build_speaker_config(entry))
-    service_name = _service_name(entry.data[CONF_MEDIA_PLAYER])
+    service_name = _service_name(hass, entry)
     runtime_data = CastNotifierRuntimeData(speaker=speaker, service_name=service_name)
     entry.runtime_data = runtime_data
 
@@ -202,11 +248,17 @@ async def async_migrate_entry(
 async def _async_update_options(
     hass: HomeAssistant, entry: CastNotifierConfigEntry
 ) -> None:
-    """Reload the entry when options change.
+    """Reload the entry when its options -- or its title -- change.
 
     The reload is what makes an options change take effect on the legacy
     service too: unloading retracts `notify.cast_<name>`, so setting up
     again registers it afresh against a `CastSpeaker` built from the new
     options (see `_async_retract_legacy_service`).
+
+    A rename goes through the same path: `async_update_entry` fires the
+    update listeners for a changed `title` exactly as it does for changed
+    `options` (`homeassistant/config_entries.py`, `_async_update_entry` ->
+    `_async_save_and_notify`), so renaming the entry in the UI retracts
+    `notify.cast_<old title>` and registers `notify.cast_<new title>`.
     """
     await hass.config_entries.async_reload(entry.entry_id)

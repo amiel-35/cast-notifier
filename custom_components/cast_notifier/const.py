@@ -19,6 +19,12 @@ CONF_VOLUME: Final = "volume"
 CONF_RESTORE_VOLUME: Final = "restore_volume"
 CONF_ANNOUNCE_PREFIX: Final = "announce_prefix"
 CONF_DENY_DOMAINS: Final = "deny_domains"
+# Quiet hours: a `HH:MM:SS` window (it may cross midnight) during which a
+# message is either spoken at `quiet_volume` or refused outright. Both
+# bounds empty means the feature is off.
+CONF_QUIET_START: Final = "quiet_start"
+CONF_QUIET_END: Final = "quiet_end"
+CONF_QUIET_VOLUME: Final = "quiet_volume"
 
 DEFAULT_RESTORE_VOLUME: Final = True
 # The security rule: state from these domains is never spoken, so a
@@ -37,6 +43,12 @@ ATTR_TTS_ENTITY: Final = "tts_entity"
 # or `alarm_control_panel.home`. Used only to enforce `deny_domains`; it is
 # never spoken and never forwarded to `tts.speak`.
 ATTR_SOURCE_ENTITY: Final = "source_entity"
+# How urgent the caller considers this message. Only `critical` means
+# anything to Cast Notifier -- it bypasses quiet hours -- but the key is
+# accepted (and ignored) whatever its value, because it is the key the
+# wider notification layer forwards untouched to every notifier.
+ATTR_PRIORITY: Final = "priority"
+PRIORITY_CRITICAL: Final = "critical"
 
 # How long Cast Notifier waits, in total, for a player to report it is done
 # speaking (it looks the way it did before the announcement again) before
