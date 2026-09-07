@@ -52,7 +52,10 @@ could never speak, since every announcement ends in
 This creates `notify.cast_<entry title>`, e.g. `notify.cast_kitchen` for
 an entry named "Kitchen", plus a device and a notify entity per entry.
 **Renaming the entry renames the service**; if two entries share a title,
-the second gets `_2`, the third `_3`, and so on, in creation order.
+the second gets `_2`, the third `_3`, and so on. Each entry then keeps
+the name it was given: deleting or disabling one never renames another,
+and a rename onto a title that is already taken lands on the next free
+number rather than stealing the service.
 
 Changing any option reloads the entry, which re-registers the service
 against the new settings: the change takes effect on the very next call,

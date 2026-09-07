@@ -18,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auto-suffixed (`media_player.kitchen_2`) produced
   `notify.cast_kitchen_2` for that same entry -- a name nothing in the UI
   could have predicted. Two entries sharing a title are numbered `_2`,
-  `_3`, ... in creation order.
+  `_3`, ..., and each entry's name is then frozen in its config entry, so
+  nothing another entry does -- being deleted, disabled or renamed -- can
+  move it. A rename onto a title another entry already uses takes the
+  next free number instead of that entry's service.
 
   Renaming an entry now renames its service, with no restart. There is
   deliberately **no alias** for the old names: update your automations,
