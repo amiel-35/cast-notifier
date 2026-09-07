@@ -37,7 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and silently ignored.
 - **`data.priority`.** Accepted (and otherwise ignored) on the legacy
   service, so a payload fanned out by a wider notification layer reaches
-  Cast Notifier unchanged. Only `critical` means anything here.
+  Cast Notifier unchanged. Only `critical` means anything here. It is
+  validated as a string (`cv.string`, which coerces numbers but refuses
+  `null`, lists and dicts), deliberately: a `priority` that is not a
+  scalar is a caller sending a payload it has not thought through, and
+  Cast Notifier refuses whole payloads it cannot read rather than
+  speaking half of one.
 - **A volume timeline for every announcement.** Five timestamped
   readings -- before, requested, after `volume_set` settled, as reported
   while the player is `playing`, after the restore -- at DEBUG in the log

@@ -28,8 +28,15 @@ rules:
   brands:
     status: done
     comment: >-
-      Icon bundled in-repo under custom_components/cast_notifier/brand/,
-      which HACS serves for a custom integration from 2026.3 onwards.
+      Icon bundled in-repo under custom_components/cast_notifier/brand/
+      (icon.png and icon@2x.png). Home Assistant serves a custom
+      integration's own brand directory rather than the CDN:
+      homeassistant/components/brands/__init__.py,
+      BrandsIntegrationView._serve_from_custom_integration, gated on
+      Integration.has_branding (homeassistant/loader.py:898) -- both read
+      in the 2026.9.1 checkout. No claim is made here about which release
+      that landed in, or about what the HACS action's own brands check
+      does with it: neither is something this repository can verify.
   common-modules: done
   config-flow: done
   config-flow-test-coverage: done
@@ -68,7 +75,20 @@ rules:
       PLAY_MEDIA, since such a player could never speak.
   test-before-setup:
     status: exempt
-    comment: Same reasoning as test-before-configure.
+    comment: >-
+      There is nothing to test: setup opens no connection, it stores a
+      speaker object and registers two notify surfaces. The configured
+      media_player may legitimately not exist yet, so its absence is not
+      a reason to fail either. after_dependencies: cast only guarantees
+      that the cast component's setup has been awaited before ours
+      (homeassistant/setup.py, the after_dependencies loop at 221); cast
+      entities are added afterwards, from a dispatcher callback fed by a
+      discovery job its own entry does not await
+      (homeassistant/components/cast/media_player.py:151-165). Raising
+      ConfigEntryNotReady on a player that is merely late would put a
+      healthy entry into a retry loop. A player that is really gone
+      surfaces on the first announcement, as a raised
+      HomeAssistantError -- see entity-unavailable, an honest todo.
   unique-config-entry: done
 
   # Silver
