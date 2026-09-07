@@ -272,3 +272,64 @@ async def test_diagnostics_expose_the_last_announcement(
     volumes = {step["step"]: step["volume"] for step in last["steps"]}
     assert volumes[STEP_VOLUME_WHILE_PLAYING] == 0.55
     assert volumes[STEP_VOLUME_REQUESTED] == 0.40
+
+
+async def test_a_failed_restore_is_not_recorded_as_a_restore(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restore that did not happen leaves a `volume_restore_failed` step.
+
+    `_async_set_volume` reports a refused `media_player.volume_set`
+    instead of raising, because speaking matters more than the volume it
+    is spoken at -- but the timeline recorded `volume_restored` anyway,
+    reading back the volume the player never left. The one reading that
+    would explain a speaker stuck at announcement volume said everything
+    was fine.
+    """
+    monkeypatch.setattr(
+        "custom_components.cast_notifier.speaker.PLAYBACK_TIMEOUT", 0.05
+    )
+    _set_player(hass, "idle", volume_level=0.30)
+
+    calls: list[ServiceCall] = []
+
+    async def _volume_set(call: ServiceCall) -> None:
+        calls.append(call)
+        if len(calls) > 1:
+            raise HomeAssistantError("player went away")
+        _set_player(hass, "idle", volume_level=call.data["volume_level"])
+
+    hass.services.async_register("media_player", "volume_set", _volume_set)
+    async_mock_service(hass, "tts", "speak")
+
+    speaker = CastSpeaker(hass, _config(volume=0.40, restore_volume=True))
+    await speaker.async_speak(SpeakRequest(message="Hi"))
+
+    timeline = speaker.last_announcement
+    assert timeline is not None
+    volumes = {step["step"]: step["volume"] for step in timeline.steps}
+    assert STEP_VOLUME_RESTORED not in volumes
+    # The volume the player is actually left at, which is the thing an
+    # operator needs to see.
+    assert volumes["volume_restore_failed"] == 0.40
+
+
+async def test_a_successful_restore_records_no_failure(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two steps are exclusive: one announcement records one of them."""
+    monkeypatch.setattr(
+        "custom_components.cast_notifier.speaker.PLAYBACK_TIMEOUT", 0.05
+    )
+    _set_player(hass, "idle", volume_level=0.30)
+    _volume_set_moves_the_player(hass)
+    async_mock_service(hass, "tts", "speak")
+
+    speaker = CastSpeaker(hass, _config(volume=0.40, restore_volume=True))
+    await speaker.async_speak(SpeakRequest(message="Hi"))
+
+    timeline = speaker.last_announcement
+    assert timeline is not None
+    steps = {step["step"] for step in timeline.steps}
+    assert STEP_VOLUME_RESTORED in steps
+    assert "volume_restore_failed" not in steps

@@ -386,3 +386,127 @@ async def test_quiet_hours_through_the_legacy_service(
 
     assert len(speak_calls) == 1
     assert speak_calls[0].data["message"] == "Water leak"
+
+
+async def test_a_player_that_cannot_set_its_volume_warns_about_quiet_volume(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`quiet_volume` on a fixed-output player is a warning, not a refusal.
+
+    A Cast group, or any player that does not advertise `VOLUME_SET`, is
+    left alone entirely (`speaker.py`, `manage_volume`): the message is
+    spoken at whatever volume the player is on, and the whole point of
+    `quiet_volume` -- "at night, but quietly" -- silently does not
+    happen. Speaking anyway is the right call, since the alternative is a
+    notifier that goes mute at night; saying nothing about it is not.
+    """
+    monkeypatch.setattr("custom_components.cast_notifier.speaker.PLAYBACK_TIMEOUT", 0)
+    await _freeze(hass, freezer, "2026-09-07 23:30:00+00:00")
+    hass.states.async_set(
+        MEDIA_PLAYER,
+        "idle",
+        {
+            "supported_features": MediaPlayerEntityFeature.PLAY_MEDIA,
+            "volume_level": 0.8,
+        },
+    )
+    speak_calls = async_mock_service(hass, "tts", "speak")
+    volume_calls = async_mock_service(hass, "media_player", "volume_set")
+
+    speaker = CastSpeaker(hass, _config(quiet_volume=0.1, **NIGHT))
+
+    with caplog.at_level(
+        logging.WARNING, logger="custom_components.cast_notifier.speaker"
+    ):
+        await speaker.async_speak(SpeakRequest(message="Hello"))
+
+    assert len(speak_calls) == 1
+    assert volume_calls == []
+    assert "quiet_volume could not be applied" in caplog.text
+    assert MEDIA_PLAYER in caplog.text
+
+
+async def test_a_configured_volume_that_cannot_be_applied_says_nothing_extra(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The warning is about quiet hours, not about volume management.
+
+    A player that cannot set its volume is a permanent, deliberate
+    situation; warning on every announcement would make the log useless.
+    The quiet-hours case is different: the user configured a rule that is
+    silently not happening.
+    """
+    monkeypatch.setattr("custom_components.cast_notifier.speaker.PLAYBACK_TIMEOUT", 0)
+    await _freeze(hass, freezer, "2026-09-07 12:00:00+00:00")
+    hass.states.async_set(
+        MEDIA_PLAYER,
+        "idle",
+        {
+            "supported_features": MediaPlayerEntityFeature.PLAY_MEDIA,
+            "volume_level": 0.8,
+        },
+    )
+    async_mock_service(hass, "tts", "speak")
+
+    speaker = CastSpeaker(hass, _config(volume=0.4, quiet_volume=0.1, **NIGHT))
+
+    with caplog.at_level(
+        logging.WARNING, logger="custom_components.cast_notifier.speaker"
+    ):
+        await speaker.async_speak(SpeakRequest(message="Hello"))
+
+    assert "quiet_volume could not be applied" not in caplog.text
+
+
+async def test_quiet_hours_follow_the_instance_time_zone(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """The window is read in local time, not in UTC.
+
+    23:30 UTC is 01:30 in Paris, i.e. the middle of a 22:00-07:00 night
+    window -- and 23:30 UTC would be inside that window too, which proves
+    nothing. The daytime half below is what does.
+    """
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-09-07 23:30:00+00:00")
+    _set_player(hass)
+    async_mock_service(hass, "tts", "speak")
+
+    speaker = CastSpeaker(hass, _config(**NIGHT))
+    with pytest.raises(ServiceValidationError):
+        await speaker.async_speak(SpeakRequest(message="Hello"))
+
+    # 06:30 UTC is 08:30 in Paris: past the end of the window, although a
+    # UTC reading would still call it night.
+    freezer.move_to("2026-09-07 06:30:00+00:00")
+    await speaker.async_speak(SpeakRequest(message="Hello"))
+
+
+async def test_a_dst_transition_moves_the_window_with_the_clock(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """The offset used is the one in force on the day, not a fixed one.
+
+    Europe/Paris moves from +01:00 to +02:00 at 01:00 UTC on 2026-03-29.
+    The same 05:30 UTC instant is therefore 06:30 local the day before --
+    still inside a 22:00-07:00 night window -- and 07:30 local on the
+    transition day, which is daytime. Anything that cached an offset, or
+    compared UTC, would treat the two identically.
+    """
+    await hass.config.async_set_time_zone("Europe/Paris")
+    _set_player(hass)
+    async_mock_service(hass, "tts", "speak")
+    speaker = CastSpeaker(hass, _config(**NIGHT))
+
+    freezer.move_to("2026-03-28 05:30:00+00:00")
+    with pytest.raises(ServiceValidationError):
+        await speaker.async_speak(SpeakRequest(message="Hello"))
+
+    freezer.move_to("2026-03-29 05:30:00+00:00")
+    await speaker.async_speak(SpeakRequest(message="Hello"))

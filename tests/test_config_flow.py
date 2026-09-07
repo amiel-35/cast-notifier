@@ -373,3 +373,55 @@ async def test_the_options_form_prefills_the_configured_quiet_hours(
     }
     assert suggested[CONF_QUIET_START] == "22:00:00"
     assert suggested[CONF_QUIET_END] == "07:00:00"
+
+
+async def test_a_refused_options_form_keeps_the_other_edits(
+    hass: HomeAssistant,
+) -> None:
+    """Re-showing the options form after an error must not undo the rest.
+
+    Half a quiet window sends the user back to the form. Everything else
+    they changed in the same submission -- an announce prefix, a volume,
+    a deny list -- has to still be there, or fixing one field means
+    retyping the others. The user step already does this
+    (`add_suggested_values_to_schema`); the options step rebuilt the
+    schema from the *stored* options and only carried the two quiet-hours
+    fields over.
+    """
+    init_result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    created = await hass.config_entries.flow.async_configure(
+        init_result["flow_id"], USER_INPUT
+    )
+    entry = hass.config_entries.async_get_entry(created["result"].entry_id)
+    assert entry is not None
+    assert entry.options["announce_prefix"] is None
+
+    options_result = await hass.config_entries.options.async_init(entry.entry_id)
+    edited = {
+        **USER_INPUT,
+        "announce_prefix": "Attention",
+        CONF_VOLUME: 0.42,
+        CONF_DENY_DOMAINS: "lock",
+        # ... and the mistake that sends the form back.
+        CONF_QUIET_START: "22:00:00",
+    }
+    del edited[CONF_MEDIA_PLAYER]
+
+    refused = await hass.config_entries.options.async_configure(
+        options_result["flow_id"], edited
+    )
+
+    assert refused["type"] is FlowResultType.FORM
+    assert refused["errors"] == {CONF_QUIET_END: "quiet_hours_incomplete"}
+
+    suggested = {
+        marker.schema: marker.description["suggested_value"]
+        for marker in refused["data_schema"].schema
+        if marker.description and "suggested_value" in marker.description
+    }
+    assert suggested["announce_prefix"] == "Attention"
+    assert suggested[CONF_VOLUME] == 0.42
+    assert suggested[CONF_DENY_DOMAINS] == "lock"
+    assert suggested[CONF_QUIET_START] == "22:00:00"
