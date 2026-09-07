@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-07
+
+### Changed
+
+- **Breaking: `notify.*` services are renamed.** The service name now
+  comes from the **config entry title** instead of the `media_player`
+  entity id: an entry titled "Kitchen" owns `notify.cast_kitchen`,
+  whatever its player is called. Before, a player Home Assistant had
+  auto-suffixed (`media_player.kitchen_2`) produced
+  `notify.cast_kitchen_2` for that same entry -- a name nothing in the UI
+  could have predicted. Two entries sharing a title are numbered `_2`,
+  `_3`, ... in creation order.
+
+  Renaming an entry now renames its service, with no restart. There is
+  deliberately **no alias** for the old names: update your automations,
+  scripts and `alert.notifiers:` entries once, following
+  [the upgrade notes](README.md#01x-to-020-services-are-renamed).
+
+### Added
+
+- **Quiet hours.** New options `quiet_start` / `quiet_end` (a window that
+  may cross midnight; both empty means off) and an optional
+  `quiet_volume`. Inside the window a message is spoken at `quiet_volume`,
+  or refused with a translated `quiet_hours` error when there is none --
+  logged at INFO with that reason. `data.priority: critical` bypasses
+  quiet hours entirely, and a per-call `data.volume` still wins over
+  `quiet_volume`. Half a window is refused in the form rather than stored
+  and silently ignored.
+- **`data.priority`.** Accepted (and otherwise ignored) on the legacy
+  service, so a payload fanned out by a wider notification layer reaches
+  Cast Notifier unchanged. Only `critical` means anything here.
+- **A volume timeline for every announcement.** Five timestamped
+  readings -- before, requested, after `volume_set` settled, as reported
+  while the player is `playing`, after the restore -- at DEBUG in the log
+  and in the entry's diagnostics as `last_announcement`, bounded to the
+  most recent announcement. The `playing` reading is the one that exists
+  nowhere else: the first real announcement played at an observed 0.55
+  for a configured 0.40, and nothing said so.
+- `icons.json`: the notify entity has its own icon, through a translation
+  key rather than a hard-coded `_attr_icon`.
+- README sections on quiet hours, troubleshooting (how to read the volume
+  timeline) and upgrade notes; `docs/ARCHITECTURE.md` sections on quiet
+  hours, the volume timeline and service naming; three new entries in
+  `docs/known-issues.md`.
+
+### Fixed
+
+- `quality_scale.yaml` assessed bronze only, and claimed `brands: todo`
+  although the icon has been bundled since 0.1.1. Every silver, gold and
+  platinum rule is now assessed as well, with a reason for anything short
+  of `done`. Three honest `todo`s remain: `entity-unavailable`,
+  `reconfiguration-flow` and `repair-issues`.
+- `PARALLEL_UPDATES = 0` on the notify platform: nothing polls, and
+  announcements are already serialized per player.
+
 ## [0.1.1] - 2026-09-07
 
 ### Fixed
@@ -88,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifecycle, the config flow, the speaker logic, the notify platform,
   diagnostics, and translation key parity.
 
-[Unreleased]: https://github.com/amiel-35/cast-notifier/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/amiel-35/cast-notifier/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/amiel-35/cast-notifier/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/amiel-35/cast-notifier/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amiel-35/cast-notifier/releases/tag/v0.1.0

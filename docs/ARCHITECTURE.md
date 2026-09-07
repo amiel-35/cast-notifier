@@ -181,6 +181,11 @@ announcement in progress.
 - `data.source_entity`: the entity a message is *about*
   (e.g. `alarm_control_panel.home`). Never spoken; used only to enforce
   `deny_domains`.
+- `data.priority`: how urgent the caller considers this message. Only
+  `critical` means anything here -- it bypasses quiet hours -- but any
+  string is accepted and ignored, because this is the key a wider
+  notification layer forwards untouched to every notifier it fans out to.
+  Never spoken.
 
 `data` is validated by `SPEAK_DATA_SCHEMA` (`speaker.py`) before any of it
 is read: `source_entity` must be an entity id, `volume` a float in
@@ -215,6 +220,79 @@ logged and swallowed, answering `POST /api/services/notify/cast_kitchen`
 with a silent HTTP 200 for a message nobody ever heard. See
 [`known-issues.md`](known-issues.md) for what that double reporting costs
 under core `alert`.
+
+## Quiet hours
+
+Three options: `quiet_start`, `quiet_end` (both `HH:MM:SS`, from a
+`TimeSelector`) and an optional `quiet_volume`. `is_within_quiet_hours`
+(`speaker.py`) is a pure function of the two bounds and a
+`datetime.time`, which is why every boundary is unit tested rather than
+inferred from a frozen clock.
+
+The window is **half-open**, `[start, end)`, so an end of `07:00:00`
+means "quiet until 07:00, speaking from 07:00", and it may **cross
+midnight**, which is the normal case: `22:00` -> `07:00` reads as "at or
+after start, or before end". It is evaluated against the instance's local
+time (`homeassistant/util/dt.py::now`, i.e. `hass.config.time_zone`), not
+UTC.
+
+Quiet hours are off whenever the window cannot be read as a real
+interval: a bound missing, a bound unparseable, or the two bounds equal.
+That last one is a decision, not an oversight -- a zero-length window
+could just as well be read as "always quiet", and silently muting a
+notifier for 24 hours because someone set the same time twice is the
+worst available reading. A half-configured window is refused by the
+options flow (`quiet_hours_incomplete`) rather than stored and ignored
+for good.
+
+Inside the window:
+
+- with a `quiet_volume`, the message is spoken at that volume;
+- without one, it is **refused**: `CastNotifierQuietHours`, a translated
+  `ServiceValidationError` like the other two (ADR-015), plus an INFO log
+  line carrying the reason `quiet_hours` and the window. INFO, not
+  WARNING: the configuration is doing exactly what it was told to do.
+
+Two escapes, in this order of precedence:
+
+1. `data.priority: "critical"` bypasses the check entirely, before the
+   window is even evaluated. A water leak at 3am is what a notifier is
+   for.
+2. A per-call `data.volume` wins over `quiet_volume`. A caller that names
+   a volume has said something about *this* message; `quiet_volume` is a
+   rule about this time of day.
+
+So the full volume precedence is `data.volume` > `quiet_volume` (in the
+window) > the entry's `volume`. The check runs before the per-player
+lock, like the deny list, so a refused call never queues behind an
+announcement in progress.
+
+## The volume timeline
+
+`speaker.py` records an `AnnouncementTimeline` for every announcement:
+five volume readings, each with a UTC timestamp, logged at DEBUG and
+exposed through the entry's diagnostics as `last_announcement`.
+
+| step | what it answers |
+|---|---|
+| `volume_before` | what the player was at when the call arrived |
+| `volume_requested` | what Cast Notifier decided to speak at |
+| `volume_after_set` | what the state attribute said once `volume_set` returned |
+| `volume_while_playing` | what the player reported while it was `playing` |
+| `volume_restored` | what it was left at |
+
+The fourth is the one that does not exist anywhere else. `volume_set`
+returning, and the attribute just after it, both describe what Home
+Assistant *asked for*; a Cast device can report something else once it
+starts playing. The first real announcement on this integration played at
+an observed 0.55 for a configured 0.40, and nothing in the log said so.
+It is captured by a state listener registered for the duration of the
+call (`_async_observe_playing_volume`), which keeps only the first
+`playing` observation so a long clip cannot grow the timeline.
+
+Bounded to one announcement, deliberately: this is a diagnostic aid for
+"why was the message I just heard that loud?", not a history. A second
+announcement replaces the first.
 
 ## The deny list: an opt-in safety net
 
@@ -316,16 +394,59 @@ Each config entry registers one service device (`DeviceInfo` with
 `identifiers={(DOMAIN, entry.entry_id)}`, `DeviceEntryType.SERVICE`) named
 after the entry -- which the config flow titles after the Cast player. The
 `NotifyEntity` sets `_attr_has_entity_name = True` and `_attr_name = None`,
-so it inherits the device's name and lands on `notify.<player name>`. There
-is deliberately **no** `_attr_translation_key`: a translated entity name
-would win over the device name and give every entry the same one again,
-which is the bug below. The `entity` section of `strings.json` was dropped
-with it.
+so it inherits the device's name and lands on `notify.<entry title>`.
 
 Before that, every entry hard-coded `_attr_name = "Cast Notifier"` and no
 device at all: a second entry produced a second entity with the same
 friendly name, colliding on `notify.cast_notifier` and indistinguishable in
 the UI.
+
+There **is** an `_attr_translation_key` (`announcement`), and it exists
+for `icons.json` alone -- it is what lets the entity have an icon without
+a hard-coded `_attr_icon` (the `icon-translations` rule). It cannot leak
+into the name: `Entity._name_internal`
+(`homeassistant/helpers/entity.py`) opens with
+`if hasattr(self, "_attr_name"): return self._attr_name`, so a class that
+sets `_attr_name = None` never reaches the translation lookup at all.
+`strings.json` has no `entity` section either, so there is no name to
+find. A test pins the entity's friendly name to its device's.
+
+### The legacy service name
+
+`notify.cast_<slugify(entry.title)>`, resolved in `__init__.py`
+(`_base_service_name` / `_service_name`) and handed to the legacy
+platform as `CONF_NAME` in the discovery payload, which
+`notify/legacy.py::async_setup_legacy.async_setup_platform` slugifies
+again into the final service name.
+
+It used to come from the `media_player` **entity id**, which was wrong in
+a way only a real installation showed: a player Home Assistant had
+auto-suffixed (`media_player.kitchen_2`) produced `notify.cast_kitchen_2`
+for an entry titled "Kitchen", and nothing in the UI explained where that
+`_2` came from. The title is what the user sees, and the only part of the
+entry they can change.
+
+Renaming the entry therefore renames the service, with no restart:
+`async_update_entry` fires the entry's update listeners for a changed
+`title` exactly as it does for changed `options`
+(`homeassistant/config_entries.py`, `_async_update_entry` ->
+`_async_save_and_notify`), and the listener reloads the entry, which
+retracts the old service and registers the new one.
+
+Two entries can legitimately share a title, and a service name has to be
+unique, so duplicates are numbered `_2`, `_3`, ... in the order
+`hass.config_entries.async_entries(DOMAIN)` returns them -- insertion
+order, i.e. creation order, stable across restarts. The first entry
+created keeps the plain slug. Ignored entries are skipped (they never set
+up, so they never own a service); disabled ones are counted, so enabling
+or disabling an entry cannot silently renumber its neighbours. Deleting
+the entry that held a plain slug *does* promote the next one on the
+following reload, which is the price of a name derived from something the
+user controls.
+
+This was a breaking change in 0.2.0, with no alias for the old names: an
+integration answering to two names is one nobody can reason about, and
+the old name was the accident. See the README's upgrade notes.
 
 ## Config entry versioning
 
@@ -348,11 +469,19 @@ One config entry = one Cast player. `entry.data` holds only
 `media_player` (the entry's identity: `async_set_unique_id(media_player)` +
 `_abort_if_unique_id_configured()` prevent configuring the same player
 twice). Everything else -- `tts_entity`, `language`, `voice`, `volume`,
-`restore_volume`, `announce_prefix`, `deny_domains` -- lives in
-`entry.options` and is editable through the options flow without deleting
-and re-adding the entry. Changing options reloads the entry, which
-retracts and re-registers the legacy service (see above) and rebuilds the
-`CastSpeaker` with the new settings.
+`restore_volume`, `announce_prefix`, `deny_domains`, `quiet_start`,
+`quiet_end`, `quiet_volume` -- lives in `entry.options` and is editable
+through the options flow without deleting and re-adding the entry.
+Changing options reloads the entry, which retracts and re-registers the
+legacy service (see above) and rebuilds the `CastSpeaker` with the new
+settings.
+
+The two quiet-hours bounds are the only options that carry no schema
+`default`: `selector.TimeSelector` validates with `cv.time`
+(`homeassistant/helpers/selector.py`), which refuses the empty string, so
+"not configured" cannot be expressed as `default=""`. They are prefilled
+with suggested values instead
+(`data_entry_flow.py::add_suggested_values_to_schema`).
 
 The user step also refuses a `media_player` whose `supported_features`
 lacks `MediaPlayerEntityFeature.PLAY_MEDIA`

@@ -1,6 +1,6 @@
 [project]
 name = "cast-notifier"
-version = "0.1.1"
+version = "0.2.0"
 description = "A notify.* that speaks on Google Cast players, for Home Assistant."
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -50,3 +50,40 @@ The config entry's unique ID is the `media_player` entity id, not its
 entity registry id (which a template or YAML `media_player` does not have).
 Rename the player before configuring it, or delete and re-add the entry
 afterwards.
+
+Note that this is about the *player's* entity id, not the entry's title.
+Renaming the **entry** is supported and, since 0.2.0, renames its
+`notify.cast_<name>` service with it.
+
+## Deleting one of two entries that share a title renames the other
+
+Since 0.2.0 the service name comes from the entry title, and duplicates
+are numbered in creation order: two entries titled "Speaker" own
+`notify.cast_speaker` and `notify.cast_speaker_2`. Delete the first, and
+the second becomes `notify.cast_speaker` on the next reload -- silently,
+because from its point of view nothing about it changed.
+
+That is the cost of a name derived from something the user controls, and
+it is preferred to the alternative (a name derived from the player's
+entity id, which nobody could predict from the UI -- the bug this
+replaced). Give two players two different titles and the situation never
+arises.
+
+## A quiet-hours refusal is invisible unless the caller waits
+
+Like every other refusal, a message blocked by quiet hours raises
+(ADR-015). It is logged at INFO with the reason `quiet_hours`, not at
+WARNING: the configuration is doing what it was told to do, and a nightly
+alert would otherwise fill the log with warnings about working as
+intended. An operator who wants to see them has to be logging at INFO, or
+call with `blocking: true` and read the error.
+
+## `volume_while_playing` can be missing from the timeline
+
+The volume timeline's fourth reading comes from a state listener watching
+for the player to report `playing`. Home Assistant may never see that
+transition -- a short clip can start and finish between two state updates
+from a Cast device, which is the same reason the "announcement started"
+phase of the playback wait is bounded at 5s. When that happens the step
+is simply absent from `last_announcement`, which is itself informative:
+Home Assistant never observed the announcement at all.
