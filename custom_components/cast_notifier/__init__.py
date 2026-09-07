@@ -274,6 +274,12 @@ async def async_setup_entry(
     runtime_data = CastNotifierRuntimeData(speaker=speaker, service_name=service_name)
     entry.runtime_data = runtime_data
 
+    # After `_async_service_name`, never before. That call can write to
+    # `entry.data`, and `async_update_entry` notifies the update listeners
+    # on *any* change it saves (`config_entries.py`,
+    # `_async_update_entry` -> `_async_save_and_notify`) -- so a listener
+    # registered first would see its own setup's write, reload the entry,
+    # and reload it again on every setup after that.
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
     @callback
