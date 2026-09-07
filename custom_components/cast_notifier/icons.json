@@ -1,0 +1,9 @@
+{
+  "entity": {
+    "notify": {
+      "announcement": {
+        "default": "mdi:bullhorn"
+      }
+    }
+  }
+}
