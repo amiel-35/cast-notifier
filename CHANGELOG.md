@@ -38,14 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quiet hours entirely, and a per-call `data.volume` still wins over
   `quiet_volume`. Half a window is refused in the form rather than stored
   and silently ignored.
-- **`data.priority`.** Accepted (and otherwise ignored) on the legacy
-  service, so a payload fanned out by a wider notification layer reaches
-  Cast Notifier unchanged. Only `critical` means anything here. It is
-  validated as a string (`cv.string`, which coerces numbers but refuses
-  `null`, lists and dicts), deliberately: a `priority` that is not a
-  scalar is a caller sending a payload it has not thought through, and
-  Cast Notifier refuses whole payloads it cannot read rather than
-  speaking half of one.
+- **`data.priority`.** Accepted on the legacy service, so a payload
+  fanned out by a wider notification layer reaches Cast Notifier
+  unchanged. The vocabulary is closed: one of `info`, `normal`, `high`,
+  `critical`, exact; anything else is refused as invalid data. Only
+  `critical` acts (it bypasses quiet hours); the other three are accepted
+  and ignored. `CRITICAL`, `urgent`, `3` and `""` all fail the call
+  rather than being read as "not critical" -- see
+  [ADR-0002](docs/ADR/0002-priority-vocabulary.md).
 - **A volume timeline for every announcement.** Five timestamped
   readings -- before, requested, after `volume_set` settled, as reported
   while the player is `playing`, after the restore -- at DEBUG in the log

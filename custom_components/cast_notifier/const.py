@@ -50,11 +50,17 @@ ATTR_TTS_ENTITY: Final = "tts_entity"
 # or `alarm_control_panel.home`. Used only to enforce `deny_domains`; it is
 # never spoken and never forwarded to `tts.speak`.
 ATTR_SOURCE_ENTITY: Final = "source_entity"
-# How urgent the caller considers this message. Only `critical` means
-# anything to Cast Notifier -- it bypasses quiet hours -- but the key is
-# accepted (and ignored) whatever its value, because it is the key the
-# wider notification layer forwards untouched to every notifier.
+# How urgent the caller considers this message. This is the key the wider
+# notification layer forwards untouched to every notifier, so Cast
+# Notifier accepts it -- but only as one of `PRIORITIES`, matched exactly
+# and in lower case. Only `critical` acts (it bypasses quiet hours); the
+# other three are accepted and ignored. Anything else -- `"CRITICAL"`,
+# `"urgent"`, `3`, `""` -- is refused as invalid data rather than quietly
+# treated as "not critical": a vocabulary that swallows what it does not
+# understand teaches a caller nothing. See
+# docs/ADR/0002-priority-vocabulary.md.
 ATTR_PRIORITY: Final = "priority"
+PRIORITIES: Final = ("info", "normal", "high", "critical")
 PRIORITY_CRITICAL: Final = "critical"
 
 # How long Cast Notifier waits, in total, for a player to report it is done

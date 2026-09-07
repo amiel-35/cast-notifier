@@ -93,10 +93,30 @@ automation:
             source_entity: binary_sensor.washing_machine_done
 ```
 
-Every other `data` key is validated before anything is spoken: a bad
-`volume`, a `tts_entity` that is not a `tts.*` entity, a non-string
-`source_entity` and so on are refused with a clear error instead of failing
-somewhere inside the speaking path.
+### `data` keys
+
+| Key | Accepted values | Meaning |
+| --- | --- | --- |
+| `tts_entity` | a `tts.*` entity id | Speak through this engine instead of the entry's. |
+| `language` | string | Language code passed to `tts.speak`. |
+| `voice` | string or mapping | Voice name, or a mapping of `tts.speak` options. |
+| `volume` | number in `[0, 1]` | Volume for this message only. Wins over `quiet_volume`. |
+| `source_entity` | an entity id | The entity this message is *about*. Never spoken; the only thing `deny_domains` looks at. |
+| `priority` | exactly `info`, `normal`, `high` or `critical` | How urgent the caller considers this message. Only `critical` acts: it bypasses [quiet hours](#quiet-hours). |
+
+`priority` is matched **exactly**, in lower case: `CRITICAL`, `urgent`,
+`3` and an empty string are all refused as invalid data. That is
+deliberate. Accepting them and treating them as "not critical" would
+mean a caller who writes `priority: CRITICAL` gets a message held back
+at 3am and no indication why. The vocabulary is small so that a payload
+either says something this integration understands, or fails loudly.
+
+Every `data` key is validated before anything is spoken: a bad `volume`,
+a `tts_entity` that is not a `tts.*` entity, a `source_entity` that is
+not an entity id and so on are refused with a clear error instead of
+failing somewhere inside the speaking path. Keys not listed above are
+allowed through and ignored, so a payload shared with another notifier
+does not break this one.
 
 ## When a message is not spoken, the call fails
 

@@ -181,16 +181,20 @@ announcement in progress.
 - `data.source_entity`: the entity a message is *about*
   (e.g. `alarm_control_panel.home`). Never spoken; used only to enforce
   `deny_domains`.
-- `data.priority`: how urgent the caller considers this message. Only
-  `critical` means anything here -- it bypasses quiet hours -- but any
-  string is accepted and ignored, because this is the key a wider
-  notification layer forwards untouched to every notifier it fans out to.
-  Never spoken.
+- `data.priority`: how urgent the caller considers this message. Exactly
+  one of `info`, `normal`, `high`, `critical`, lower case, matched
+  literally; anything else is refused as invalid data. Only `critical`
+  acts -- it bypasses quiet hours -- and the other three are accepted and
+  ignored, because this is the key a wider notification layer forwards
+  untouched to every notifier it fans out to. Never spoken. See
+  [ADR-0002](ADR/0002-priority-vocabulary.md) for why the match is exact
+  rather than lenient.
 
 `data` is validated by `SPEAK_DATA_SCHEMA` (`speaker.py`) before any of it
 is read: `source_entity` must be an entity id, `volume` a float in
 `[0, 1]`, `tts_entity` an entity id in the `tts` domain, `language` a
-string, `voice` a string or a mapping. Anything else raises
+string, `voice` a string or a mapping, `priority` one of the four values
+above. Anything else raises
 `CastNotifierInvalidData` and nothing is spoken -- a malformed automation
 gets a message naming the problem instead of an `AttributeError` from
 somewhere inside the speaking path. Unknown keys are allowed through and
@@ -255,9 +259,11 @@ Inside the window:
 
 Two escapes, in this order of precedence:
 
-1. `data.priority: "critical"` bypasses the check entirely, before the
-   window is even evaluated. A water leak at 3am is what a notifier is
-   for.
+1. `data.priority: "critical"` -- that exact string -- bypasses the check
+   entirely, before the window is even evaluated. A water leak at 3am is
+   what a notifier is for. The comparison can be a plain `==` because
+   `SPEAK_DATA_SCHEMA` has already refused every spelling that is not in
+   the vocabulary.
 2. A per-call `data.volume` wins over `quiet_volume`. A caller that names
    a volume has said something about *this* message; `quiet_volume` is a
    rule about this time of day.

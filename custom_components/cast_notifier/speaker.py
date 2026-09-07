@@ -55,6 +55,7 @@ from .const import (
     ATTR_VOLUME as DATA_VOLUME,
     DOMAIN,
     PLAYBACK_TIMEOUT,
+    PRIORITIES,
     PRIORITY_CRITICAL,
 )
 
@@ -95,7 +96,7 @@ SPEAK_DATA_SCHEMA = vol.Schema(
         vol.Optional(DATA_TTS_ENTITY): _entity_id_in_domain(TTS_DOMAIN),
         vol.Optional(DATA_LANGUAGE): cv.string,
         vol.Optional(DATA_VOICE): vol.Any(cv.string, dict),
-        vol.Optional(DATA_PRIORITY): cv.string,
+        vol.Optional(DATA_PRIORITY): vol.In(PRIORITIES),
     },
     extra=vol.ALLOW_EXTRA,
 )
@@ -479,9 +480,14 @@ class CastSpeaker:
         included. A water leak at 3am is what a notifier is for, and
         `priority` is the key the wider notification layer forwards
         untouched, so a critical alert stays critical all the way down.
+
+        The comparison is exact, and it can afford to be: `data` has
+        already been through `SPEAK_DATA_SCHEMA`, which admits only the
+        four values of `PRIORITIES`. Anything else never reaches here --
+        it was refused as invalid data
+        (docs/ADR/0002-priority-vocabulary.md).
         """
-        priority = data.get(DATA_PRIORITY)
-        if isinstance(priority, str) and priority.casefold() == PRIORITY_CRITICAL:
+        if data.get(DATA_PRIORITY) == PRIORITY_CRITICAL:
             return None
 
         now = dt_util.now().time()
