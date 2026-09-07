@@ -123,3 +123,103 @@ from a Cast device, which is the same reason the "announcement started"
 phase of the playback wait is bounded at 5s. When that happens the step
 is simply absent from `last_announcement`, which is itself informative:
 Home Assistant never observed the announcement at all.
+
+## Final findings, not fixed (2026-09-07, repository archived)
+
+Measured on a real installation (Home Assistant 2026.9.1, a Google Home
+Mini as the `cast` player, Music Assistant 2.10 fronting the same speaker,
+Cloud TTS) the day the repository was archived. Timings are relative to the
+service call. None of these were fixed; they are recorded so that anyone
+still installing the code knows what to expect. Issue numbers refer to this
+repository unless noted.
+
+### #2 — Volume never restored when the player is `off`
+
+A Google speaker at rest is `off`. Core hides every media_player attribute
+in that state (`homeassistant/components/media_player/__init__.py`,
+`MediaPlayerEntity.state_attributes`, 2026.9.1 line 1142), so
+`_current_volume()` reads `None`, `previous_volume` is `None` and the
+restore is skipped: **the speaker stays at the announcement volume**.
+Observed on every call from `off`: `off` → `idle` 0.40 → `playing` → `idle`
+→ `off`, speaker left at 0.40 (was 0.30). The 0.2.0 diagnostics timeline
+shows it plainly: `volume_before: null`, `volume_after_set: null`,
+`volume_while_playing: 0.4`, no `volume_restored` step. A workable fix would
+have been `media_player.turn_on` first (the Default Media Receiver loads,
+the state becomes `idle` and `volume_level` is readable within ~2 s).
+
+### #3 — The call blocks long after the clip has ended
+
+The wait ends when the player's fingerprint (`state`, `media_content_id`,
+`app_id`, `media_title`) is **equal** to the pre-announcement one. From
+`off`, the player sits `idle` under the Default Media Receiver for ~10 s
+after the clip before going back to `off`: a 4 s message costs 14–20 s.
+With music playing before, the fingerprint never comes back and the call
+waits the full `PLAYBACK_TIMEOUT` (30 s): measured 32–33 s. The README's
+"up to 5 seconds" only covers the case where the media change is not
+observed at all.
+
+### #5 — The previous playback is never resumed
+
+On Cast, `play_media` for the clip replaces whatever the receiver was
+playing; nothing restarts it. Measured with a radio stream started by Home
+Assistant (URL) and with a session started from a phone app (Radio France
+app): both times the speaker ended `off`, silent. A best-effort resume
+(re-issue `play_media` with the previous URL) would only ever cover media
+Home Assistant itself started. The only paths that do resume: Music
+Assistant's native announcement (measured: pause +0.5 s, voice +3.4 s,
+volume restored +9.5 s, radio resumed +11–12 s) and Google's Broadcast
+(`google_assistant_sdk`, needs a per-user Google Cloud project).
+
+### #4 — A non-Cast player is accepted, and nothing says which path spoke
+
+The `EntitySelector(integration="cast")` filter is applied by the frontend
+only; an entry created through the API against a Music Assistant entity
+fronting the same speaker was accepted. That entity advertises
+`MEDIA_ANNOUNCE`, so the integration delegated to the native path and Music
+Assistant applied its own announce-volume rule (+85 %: 0.30 → 0.55, 0.36 →
+0.66) instead of the entry's `volume`. 0.1.1 emitted no debug line at all;
+0.2.0's timeline helps but still does not name the path.
+
+### #6 — Refusals over the REST API surface as HTTP 500
+
+`ServiceValidationError` is not mapped to 4xx by
+`homeassistant/components/api/__init__.py` (`APIDomainServicesView.post`
+catches only `vol.Invalid` and `ServiceNotFound`), so a deny-list or
+invalid-`data` refusal called through `POST /api/services/notify/...` gets
+"500 Server got itself in trouble" plus an `aiohttp.server` traceback in
+the log, on top of the integration's WARNING. Websocket and `blocking: true`
+callers get the clean translated error. Core behaviour, documented here.
+
+### #7 — README did not say what happens to the music
+
+"Waits for the player to be doing what it was doing before restoring it"
+reads as if playback resumed; it does not. See #5 for the alternatives.
+
+### #8 — Scope: the core already does the job
+
+`homeassistant/components/tts/notify.py` (legacy `notify: - platform: tts`,
+still shipped in 2026.9.1, no deprecation issue in `notify/legacy.py`)
+gives a `notify.<name>` on any `media_player`; Cloud TTS uses the
+language's default voice (`cloud/tts.py`, `DEFAULT_VOICES`). Measured end
+to end on a Music Assistant player: call returns in 0.05 s
+(fire-and-forget), pause +0.5 s, voice +2.1 → +8.1 s, volume restored
++9.5 s, radio resumed +11.4 s. Its gaps versus this integration — no UI,
+no error back to the caller, no per-call options, Core restart needed
+(no `notify.reload` service) — were judged not worth a custom integration
+once policy (deny list, quiet hours, priority) lives in a notify router.
+This is the reason the repository was archived.
+
+### What worked
+
+Audio on a real Google Home Mini; the deny list (case-insensitive) and
+`data` validation refusing without a sound; two near-simultaneous calls
+serialized without overlap; volume restore when `volume_level` was visible
+(player already playing); the 0.2.0 diagnostics timeline; service naming
+from the entry title.
+
+### AirPlay Notifier, same day
+
+The sibling repository was archived for the same reason. Its Direct
+strategy (`apple_tv`) can never resume a stream another device was sending;
+its Music Assistant strategy already was the protocol-agnostic native path
+(amiel-35/airplay-notifier#6, #7).

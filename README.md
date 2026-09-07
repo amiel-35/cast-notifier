@@ -2,6 +2,39 @@
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> **⚠️ Archived — 7 September 2026.** Development has stopped and this
+> repository is read-only. The final release is
+> [v0.2.0](https://github.com/amiel-35/cast-notifier/releases/tag/v0.2.0);
+> the code stays installable as a HACS custom repository, **unsupported**.
+>
+> **Why.** Home Assistant already has a `notify` that speaks: the `tts`
+> integration ships a legacy `notify` platform
+> (`homeassistant/components/tts/notify.py`). Five lines of YAML give you a
+> `notify.<name>` target that `alert`, blueprints and automations can use:
+>
+> ```yaml
+> notify:
+>   - name: kitchen
+>     platform: tts
+>     entity_id: tts.home_assistant_cloud   # any tts.* entity
+>     media_player: media_player.kitchen    # any media_player
+>     language: fr-FR
+> ```
+>
+> Point it at a **Music Assistant** player and the music is paused,
+> the message spoken, the volume restored and the music **resumed** —
+> natively, which the local Cast protocol this integration used can never
+> do (see [`docs/known-issues.md`](docs/known-issues.md), "Final findings").
+> The Cloud TTS engine picks the language's default voice on its own.
+>
+> What this integration did on top — a config flow instead of YAML, an
+> error raised to the caller when the player is dead, its own volume
+> management on a bare Cast player, a deny list, quiet hours, priorities —
+> does not justify maintaining a custom integration: policy belongs to a
+> notify router, and the volume management is where the real-hardware
+> tests found the defects. Measured on a real install on 7 September 2026;
+> every finding is in `docs/known-issues.md`.
+
 A [Home Assistant](https://www.home-assistant.io/) custom integration that
 gives you a `notify.*` service that **speaks** on a Google Cast player
 (Google Home, Nest, Chromecast -- any `media_player` of the `cast`

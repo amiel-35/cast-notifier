@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## Archived - 2026-09-07
+
+Development has stopped; the repository is read-only. The final release is
+0.2.0. Reason: Home Assistant's `tts` integration already provides a legacy
+`notify` platform (`notify: - platform: tts`) that turns any `media_player`
+into a `notify.<name>` target, and pointed at a Music Assistant player it
+pauses, announces and resumes natively -- something the local Cast protocol
+this integration speaks through cannot do. What this integration added on top
+(config flow, errors raised to the caller, volume management on a bare Cast
+player, deny list, quiet hours, priorities) does not justify maintaining a
+custom integration: policy belongs to a notify router, and the volume
+management is where real-hardware tests found the defects. The findings, with
+measurements, are in `docs/known-issues.md` ("Final findings, not fixed").
+The code stays installable as a HACS custom repository, unsupported.
+
 ## [0.2.0] - 2026-09-07
 
 ### Changed
