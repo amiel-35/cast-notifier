@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 INTEGRATION_DIR = (
@@ -102,21 +101,29 @@ def test_every_rule_of_every_tier_is_assessed() -> None:
     assert set(_rules()) == set(ALL_RULES)
 
 
-@pytest.mark.parametrize("rule", ALL_RULES)
-def test_each_rule_has_a_valid_status(rule: str) -> None:
+def test_each_rule_has_a_valid_status() -> None:
     """`done`, or `todo`/`exempt` with a reason worth reading.
 
     The shorthand `<rule>: done` is what hassfest's schema allows without
-    a comment; anything less than done has to say why.
+    a comment; anything less than done has to say why, in more than a
+    handful of characters. Reported all at once, so a stale file is fixed
+    in one pass rather than one rule per run.
     """
-    value = _rules()[rule]
-    if isinstance(value, str):
-        assert value == "done", f"{rule}: only `done` may be written as a bare status"
-        return
+    problems: list[str] = []
+    for rule, value in _rules().items():
+        if isinstance(value, str):
+            if value != "done":
+                problems.append(f"{rule}: only `done` may be a bare status")
+            continue
+        if set(value) != {"status", "comment"}:
+            problems.append(f"{rule}: expected exactly `status` and `comment`")
+            continue
+        if value["status"] not in ("done", "todo", "exempt"):
+            problems.append(f"{rule}: unknown status {value['status']!r}")
+        if len(value["comment"].strip()) <= 20:
+            problems.append(f"{rule}: the comment says nothing")
 
-    assert set(value) == {"status", "comment"}, f"{rule}: unexpected keys"
-    assert value["status"] in ("done", "todo", "exempt")
-    assert len(value["comment"].strip()) > 20, f"{rule}: the comment says nothing"
+    assert not problems, "\n".join(problems)
 
 
 def test_bronze_is_fully_met() -> None:

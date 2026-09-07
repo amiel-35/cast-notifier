@@ -19,9 +19,21 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
-from pytest_homeassistant_custom_component.common import async_mock_service
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_mock_service,
+)
 
-from custom_components.cast_notifier.const import DOMAIN
+from custom_components.cast_notifier.const import (
+    CONF_DENY_DOMAINS,
+    CONF_MEDIA_PLAYER,
+    CONF_QUIET_END,
+    CONF_QUIET_START,
+    CONF_RESTORE_VOLUME,
+    CONF_TTS_ENTITY,
+    CONF_VOLUME,
+    DOMAIN,
+)
 from custom_components.cast_notifier.speaker import (
     CastNotifierQuietHours,
     CastSpeaker,
@@ -319,3 +331,58 @@ async def test_a_priority_that_is_not_a_string_is_invalid_data(
         )
 
     assert len(speak_calls) == 0
+
+
+async def test_quiet_hours_through_the_legacy_service(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """End to end: the refusal and the `critical` bypass reach the caller.
+
+    The unit tests above drive `CastSpeaker` directly. This one goes
+    through `notify.cast_<name>`, which is the surface a wider
+    notification layer actually calls, and checks that `data.priority`
+    survives the trip -- it is carried in the `data` payload of a legacy
+    notify call, which nothing between the caller and the speaker
+    inspects.
+    """
+    await _freeze(hass, freezer, "2026-09-07 23:30:00+00:00")
+    _set_player(hass)
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Kitchen",
+        unique_id=MEDIA_PLAYER,
+        data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
+        options={
+            CONF_TTS_ENTITY: TTS_ENTITY,
+            CONF_RESTORE_VOLUME: True,
+            CONF_VOLUME: None,
+            CONF_DENY_DOMAINS: [],
+            CONF_QUIET_START: "22:00:00",
+            CONF_QUIET_END: "07:00:00",
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    speak_calls = async_mock_service(hass, "tts", "speak")
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await hass.services.async_call(
+            "notify", "cast_kitchen", {"message": "Hello"}, blocking=True
+        )
+
+    assert len(speak_calls) == 0
+    assert raised.value.translation_key == "quiet_hours"
+
+    await hass.services.async_call(
+        "notify",
+        "cast_kitchen",
+        {"message": "Water leak", "data": {"priority": "critical"}},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert len(speak_calls) == 1
+    assert speak_calls[0].data["message"] == "Water leak"
