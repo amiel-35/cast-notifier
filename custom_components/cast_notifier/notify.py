@@ -9,19 +9,19 @@ modern automations expect:
 - `async_setup_entry` registers a `NotifyEntity` for the same config entry.
 
 Both simply build a `SpeakRequest` from the call's `message`/`data` and hand
-it to the shared `CastSpeaker`. Nothing is swallowed here: per ADR-015 of
-the suite, a call that did not speak fails. A `deny_domains` refusal and a
-malformed `data` payload both reach the caller as a translated
-`ServiceValidationError` (and are logged as warnings by `CastSpeaker` on
-the way out); an unavailable TTS engine or a dead player reaches it as a
-`HomeAssistantError`. An automation that believes it spoke when it did not
-is worse than a red error in its trace.
+it to the shared `CastSpeaker`. Nothing is swallowed here: per
+docs/ADR/0003-refusals-raise.md, a call that did not speak fails. A
+`deny_domains` refusal and a malformed `data` payload both reach the caller
+as a translated `ServiceValidationError` (and are logged as warnings by
+`CastSpeaker` on the way out); an unavailable TTS engine or a dead player
+reaches it as a `HomeAssistantError`. An automation that believes it spoke
+when it did not is worse than a red error in its trace.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Final
 
 from homeassistant.components.notify import NotifyEntity, NotifyEntityFeature
 from homeassistant.components.notify.const import ATTR_DATA
@@ -38,6 +38,16 @@ from .speaker import CastSpeaker, SpeakRequest
 
 _LOGGER = logging.getLogger(__name__)
 
+# Nothing here polls, and speaking is already serialized per player by the
+# `CastSpeaker`'s own lock, so Home Assistant does not need to serialize
+# entity calls on top of that.
+PARALLEL_UPDATES = 0
+
+# The entity's translation key. It carries no name -- see
+# `CastNotifyEntity` -- and exists so `icons.json` can give the entity its
+# icon rather than hard-coding one with `_attr_icon`.
+ENTITY_TRANSLATION_KEY: Final = "announcement"
+
 
 async def _async_speak(speaker: CastSpeaker, request: SpeakRequest) -> None:
     """Speak a request, raising anything that stopped it from being spoken.
@@ -46,7 +56,8 @@ async def _async_speak(speaker: CastSpeaker, request: SpeakRequest) -> None:
     has already logged as a warning -- is raised to the caller as a
     `HomeAssistantError` after `CastSpeaker` has restored any volume it
     changed. Swallowing a refusal would answer an automation with a silent
-    HTTP 200 for a message nobody ever heard (ADR-015).
+    HTTP 200 for a message nobody ever heard
+    (docs/ADR/0003-refusals-raise.md).
     """
     try:
         await speaker.async_speak(request)
@@ -157,13 +168,18 @@ class CastNotifyEntity(NotifyEntity):
     takes that device's name. Without this, every entry produced the same
     `notify.cast_notifier` friendly name and collided on entity id.
 
-    Deliberately no `_attr_translation_key`: a translated name would
-    override the device name for every entry, which is exactly the
-    collision above. `_attr_name = None` is the whole naming rule here.
+    The `_attr_translation_key` exists for `icons.json` alone, never for a
+    name. `Entity._name_internal` (`homeassistant/helpers/entity.py`)
+    starts with `if hasattr(self, "_attr_name"): return self._attr_name`,
+    so a class that sets `_attr_name = None` never reaches the translation
+    lookup at all: the device name still wins, and two entries stay
+    distinguishable (the collision above). `strings.json` deliberately has
+    no `entity` section, so there is no name to find either way.
     """
 
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_translation_key = ENTITY_TRANSLATION_KEY
     _attr_supported_features = NotifyEntityFeature(0)
 
     def __init__(self, entry: CastNotifierConfigEntry) -> None:

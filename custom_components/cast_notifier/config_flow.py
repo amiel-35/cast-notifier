@@ -30,6 +30,9 @@ from .const import (
     CONF_DENY_DOMAINS,
     CONF_LANGUAGE,
     CONF_MEDIA_PLAYER,
+    CONF_QUIET_END,
+    CONF_QUIET_START,
+    CONF_QUIET_VOLUME,
     CONF_RESTORE_VOLUME,
     CONF_TTS_ENTITY,
     CONF_VOICE,
@@ -42,6 +45,13 @@ from .const import (
 CAST_PLATFORM = "cast"
 MEDIA_PLAYER_DOMAIN = "media_player"
 TTS_DOMAIN = "tts"
+
+# Options the form leaves out entirely when they are empty, rather than
+# submitting an empty string: a `TimeSelector` validates its value with
+# `cv.time` (`homeassistant/helpers/selector.py`), which refuses `""`, so
+# these cannot carry a `default` in the schema and are prefilled with
+# suggested values instead.
+SUGGESTED_ONLY_OPTIONS = (CONF_QUIET_START, CONF_QUIET_END)
 
 
 def _deny_domains_to_string(domains: list[str]) -> str:
@@ -125,17 +135,9 @@ def _options_schema(hass: HomeAssistant, defaults: dict[str, Any]) -> vol.Schema
             vol.Optional(
                 CONF_VOICE, default=defaults.get(CONF_VOICE, "")
             ): selector.TextSelector(),
-            vol.Optional(CONF_VOLUME, default=defaults.get(CONF_VOLUME)): vol.Any(
-                None,
-                selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0,
-                        max=1,
-                        step=0.01,
-                        mode=selector.NumberSelectorMode.SLIDER,
-                    )
-                ),
-            ),
+            vol.Optional(
+                CONF_VOLUME, default=defaults.get(CONF_VOLUME)
+            ): _volume_slider(),
             vol.Required(
                 CONF_RESTORE_VOLUME,
                 default=defaults.get(CONF_RESTORE_VOLUME, DEFAULT_RESTORE_VOLUME),
@@ -149,8 +151,58 @@ def _options_schema(hass: HomeAssistant, defaults: dict[str, Any]) -> vol.Schema
                     defaults.get(CONF_DENY_DOMAINS, DEFAULT_DENY_DOMAINS)
                 ),
             ): selector.TextSelector(),
+            vol.Optional(CONF_QUIET_START): selector.TimeSelector(),
+            vol.Optional(CONF_QUIET_END): selector.TimeSelector(),
+            vol.Optional(
+                CONF_QUIET_VOLUME, default=defaults.get(CONF_QUIET_VOLUME)
+            ): _volume_slider(),
         }
     )
+
+
+def _volume_slider() -> vol.Any:
+    """Build the 0-1 slider shared by `volume` and `quiet_volume`.
+
+    Wrapped in `vol.Any(None, ...)` so that "no volume at all" -- the
+    default, meaning "never touch the player's volume" -- is a value the
+    schema accepts, and not just a missing key.
+    """
+    return vol.Any(
+        None,
+        selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=1,
+                step=0.01,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        ),
+    )
+
+
+def _suggested_values(defaults: dict[str, Any]) -> dict[str, Any]:
+    """Return the current values of the options prefilled by suggestion."""
+    return {
+        key: value
+        for key in SUGGESTED_ONLY_OPTIONS
+        if (value := defaults.get(key)) is not None
+    }
+
+
+def _validate_options(user_input: dict[str, Any]) -> dict[str, str]:
+    """Return the form errors in a submitted set of options.
+
+    Quiet hours are the only thing that can be wrong here: an interval
+    needs both of its bounds, and half of one would otherwise be stored
+    and silently ignored for good (`is_within_quiet_hours` in
+    `speaker.py` treats it as "off"). Refusing it in the form is the only
+    place the user can still see what they meant to configure.
+    """
+    start = user_input.get(CONF_QUIET_START)
+    end = user_input.get(CONF_QUIET_END)
+    if bool(start) is bool(end):
+        return {}
+    return {CONF_QUIET_START if not start else CONF_QUIET_END: "quiet_hours_incomplete"}
 
 
 def _parse_options(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -165,6 +217,9 @@ def _parse_options(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_DENY_DOMAINS: _string_to_deny_domains(
             user_input.get(CONF_DENY_DOMAINS, "")
         ),
+        CONF_QUIET_START: user_input.get(CONF_QUIET_START) or None,
+        CONF_QUIET_END: user_input.get(CONF_QUIET_END) or None,
+        CONF_QUIET_VOLUME: user_input.get(CONF_QUIET_VOLUME),
     }
 
 
@@ -199,6 +254,8 @@ class CastNotifierConfigFlow(ConfigFlow, domain=DOMAIN):
                 # would raise `ServiceNotSupported` on every call. Refuse it
                 # here, where the user can pick another one.
                 errors[CONF_MEDIA_PLAYER] = "player_cannot_play_media"
+            elif option_errors := _validate_options(user_input):
+                errors.update(option_errors)
             else:
                 title = state.name if state is not None else media_player
 
@@ -235,8 +292,18 @@ class CastNotifierOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the speaking settings for this entry's player."""
-        if user_input is not None:
+        errors: dict[str, str] = {}
+        if user_input is not None and not (errors := _validate_options(user_input)):
             return self.async_create_entry(data=_parse_options(user_input))
 
-        schema = _options_schema(self.hass, dict(self.config_entry.options))
-        return self.async_show_form(step_id="init", data_schema=schema)
+        defaults = dict(self.config_entry.options)
+        schema = _options_schema(self.hass, defaults)
+        # Re-showing the form after an error: keep everything that was
+        # typed, exactly as the user step does. The schema's own defaults
+        # come from the *stored* options, so suggesting only the two
+        # quiet-hours fields meant every other edit in the same
+        # submission was silently rolled back to what it had been.
+        schema = self.add_suggested_values_to_schema(
+            schema, user_input if user_input else _suggested_values(defaults)
+        )
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

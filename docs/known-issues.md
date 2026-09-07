@@ -7,8 +7,8 @@ before they surprise someone in a log.
 
 Since 0.1.1, a `deny_domains` refusal and an invalid `data` payload are
 raised to the caller as a translated `ServiceValidationError`, on top of
-being logged at WARNING by `CastSpeaker` ("Refusals raise -- ADR-015 of the
-suite" in [`ARCHITECTURE.md`](ARCHITECTURE.md)).
+being logged at WARNING by `CastSpeaker`
+([ADR-0003](ADR/0003-refusals-raise.md)).
 
 Core's `alert` integration calls its notifiers **without** `blocking`
 (`homeassistant/components/alert/entity.py`,
@@ -50,3 +50,76 @@ The config entry's unique ID is the `media_player` entity id, not its
 entity registry id (which a template or YAML `media_player` does not have).
 Rename the player before configuring it, or delete and re-add the entry
 afterwards.
+
+Note that this is about the *player's* entity id, not the entry's title.
+Renaming the **entry** is supported and, since 0.2.0, renames its
+`notify.cast_<name>` service with it.
+
+## A renamed entry can end up with a numbered service name
+
+Since 0.2.0 the service name comes from the entry title, and duplicates
+are numbered: two entries titled "Speaker" own `notify.cast_speaker` and
+`notify.cast_speaker_2`. Each entry's name is then frozen in its
+`entry.data`, so nothing another entry does can move it -- deleting the
+first of those two leaves the second on `notify.cast_speaker_2`.
+
+The one case where a rename does not give the obvious name is a rename
+*onto* a title another entry already uses: rename "Kitchen" to "Dining"
+while another entry is already called "Dining", and the renamed entry
+gets `notify.cast_dining_2`, not `notify.cast_dining`. The alternative --
+taking the name -- is not an option: core registers nothing when the name
+is already in use (`homeassistant/components/notify/legacy.py:312`), so
+the renamed entry would be mute while believing otherwise, and would
+delete the other entry's service when unloaded.
+
+The new name is visible in Developer tools -> Actions under `notify`, and
+in the entry's diagnostics as `service_name`. Give two players two
+different titles and the situation never arises.
+
+A second case needs a disabled entry. Renaming a **disabled** entry away
+from a title does not update its stored `service_name`: the update
+listener that would recompute it is only registered during setup, and a
+disabled entry never sets up, so the stale name sits in `entry.data`
+untouched. If another entry is then renamed *onto* the old title, it
+finds that stale name still "taken" and gets `_2` instead of the plain
+slug -- even though nothing visibly answers to the plain name any more.
+The plain name becomes free again as soon as the disabled entry is
+re-enabled and sets up, which recomputes its (now different) name and
+drops the stale one. This self-heals on the next rename of the entry
+stuck on `_2`: recomputing then finds the plain name free and takes it.
+
+## A quiet-hours refusal is invisible unless the caller waits
+
+Like every other refusal, a message blocked by quiet hours raises
+([ADR-0003](ADR/0003-refusals-raise.md)). It is logged at INFO with the
+reason `quiet_hours`, not at WARNING: the configuration is doing what it
+was told to do, and a nightly
+alert would otherwise fill the log with warnings about working as
+intended. An operator who wants to see them has to be logging at INFO, or
+call with `blocking: true` and read the error.
+
+## A message can cross the edge of the quiet window
+
+Quiet hours are decided when the call arrives, not when the message is
+actually spoken (`speaker.py`, `async_speak`: the check runs before the
+per-player lock, like the deny list). Announcements on one player are
+serialized, and one can wait up to `PLAYBACK_TIMEOUT` -- 30 seconds --
+for the previous one to finish. A message accepted at 21:59:59 for a
+window starting at 22:00 can therefore be heard, at full volume, just
+after 22:00; one accepted at 06:59:59 can be heard at `quiet_volume`
+just after 07:00.
+
+Deliberate: evaluating inside the lock would make a *refusal* take up to
+30 seconds to reach a caller that is waiting for it, which is worse than
+a boundary that is fuzzy by half a minute. See
+[`ARCHITECTURE.md`](ARCHITECTURE.md), "Quiet hours".
+
+## `volume_while_playing` can be missing from the timeline
+
+The volume timeline's fourth reading comes from a state listener watching
+for the player to report `playing`. Home Assistant may never see that
+transition -- a short clip can start and finish between two state updates
+from a Cast device, which is the same reason the "announcement started"
+phase of the playback wait is bounded at 5s. When that happens the step
+is simply absent from `last_announcement`, which is itself informative:
+Home Assistant never observed the announcement at all.

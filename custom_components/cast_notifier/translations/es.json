@@ -13,7 +13,10 @@
           "volume": "Volumen durante el anuncio",
           "restore_volume": "Restaurar el volumen anterior tras el anuncio",
           "announce_prefix": "Prefijo del anuncio",
-          "deny_domains": "No anunciar nunca estos dominios"
+          "deny_domains": "No anunciar nunca estos dominios",
+          "quiet_start": "Inicio de las horas de silencio",
+          "quiet_end": "Fin de las horas de silencio",
+          "quiet_volume": "Volumen durante las horas de silencio"
         },
         "data_description": {
           "media_player": "La entidad media_player (Cast u otra) que hablará.",
@@ -23,7 +26,10 @@
           "volume": "Si se define, el volumen del altavoz se ajusta a este nivel antes de hablar y se restaura después.",
           "restore_volume": "Restaurar el volumen que tenía el altavoz antes de hablar, una vez terminado el mensaje.",
           "announce_prefix": "Texto opcional pronunciado antes de cada mensaje, por ejemplo «Atención.»",
-          "deny_domains": "Dominios de entidad separados por comas. Una llamada cuyo data.source_entity pertenezca a uno de ellos se rechaza y se registra en el log en lugar de anunciarse."
+          "deny_domains": "Dominios de entidad separados por comas. Una llamada cuyo data.source_entity pertenezca a uno de ellos se rechaza y se registra en el log en lugar de anunciarse.",
+          "quiet_start": "Inicio del periodo durante el cual este altavoz debe permanecer en silencio. Deja ambas horas vacías para desactivar las horas de silencio.",
+          "quiet_end": "Fin de ese periodo. El intervalo puede cruzar la medianoche, por ejemplo de 22:00 a 07:00.",
+          "quiet_volume": "Si se define, un mensaje dentro del intervalo se pronuncia a este volumen en lugar de rechazarse. Déjalo vacío para rechazar esos mensajes. Una llamada con data.priority igual a critical ignora por completo las horas de silencio."
         }
       }
     },
@@ -31,7 +37,8 @@
       "already_configured": "Este altavoz ya está configurado en Cast Notifier."
     },
     "error": {
-      "player_cannot_play_media": "Este altavoz no admite play_media, por lo que nunca podrá hablar. Elija un altavoz Cast u otro media player capaz de reproducir medios."
+      "player_cannot_play_media": "Este altavoz no admite play_media, por lo que nunca podrá hablar. Elija un altavoz Cast u otro media player capaz de reproducir medios.",
+      "quiet_hours_incomplete": "Las horas de silencio necesitan una hora de inicio y una de fin, o ninguna de las dos."
     }
   },
   "options": {
@@ -46,7 +53,10 @@
           "volume": "Volumen durante el anuncio",
           "restore_volume": "Restaurar el volumen anterior tras el anuncio",
           "announce_prefix": "Prefijo del anuncio",
-          "deny_domains": "No anunciar nunca estos dominios"
+          "deny_domains": "No anunciar nunca estos dominios",
+          "quiet_start": "Inicio de las horas de silencio",
+          "quiet_end": "Fin de las horas de silencio",
+          "quiet_volume": "Volumen durante las horas de silencio"
         },
         "data_description": {
           "tts_entity": "La entidad tts.* usada para generar la voz, por ejemplo tts.home_assistant_cloud.",
@@ -55,9 +65,15 @@
           "volume": "Si se define, el volumen del altavoz se ajusta a este nivel antes de hablar y se restaura después.",
           "restore_volume": "Restaurar el volumen que tenía el altavoz antes de hablar, una vez terminado el mensaje.",
           "announce_prefix": "Texto opcional pronunciado antes de cada mensaje, por ejemplo «Atención.»",
-          "deny_domains": "Dominios de entidad separados por comas. Una llamada cuyo data.source_entity pertenezca a uno de ellos se rechaza y se registra en el log en lugar de anunciarse."
+          "deny_domains": "Dominios de entidad separados por comas. Una llamada cuyo data.source_entity pertenezca a uno de ellos se rechaza y se registra en el log en lugar de anunciarse.",
+          "quiet_start": "Inicio del periodo durante el cual este altavoz debe permanecer en silencio. Deja ambas horas vacías para desactivar las horas de silencio.",
+          "quiet_end": "Fin de ese periodo. El intervalo puede cruzar la medianoche, por ejemplo de 22:00 a 07:00.",
+          "quiet_volume": "Si se define, un mensaje dentro del intervalo se pronuncia a este volumen en lugar de rechazarse. Déjalo vacío para rechazar esos mensajes. Una llamada con data.priority igual a critical ignora por completo las horas de silencio."
         }
       }
+    },
+    "error": {
+      "quiet_hours_incomplete": "Las horas de silencio necesitan una hora de inicio y una de fin, o ninguna de las dos."
     }
   },
   "exceptions": {
@@ -66,6 +82,9 @@
     },
     "invalid_data": {
       "message": "Cast Notifier no ha pronunciado un mensaje en {player}: los datos de la llamada no son válidos: {error}"
+    },
+    "quiet_hours": {
+      "message": "Cast Notifier no ha pronunciado un mensaje en {player}: este altavoz está en silencio de {start} a {end}. Define un volumen para las horas de silencio, o envía el mensaje con data.priority igual a critical."
     }
   }
 }

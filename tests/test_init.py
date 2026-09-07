@@ -48,7 +48,9 @@ def _set_player(hass: HomeAssistant, entity_id: str = MEDIA_PLAYER) -> None:
 
 def _entry(
     media_player: str = MEDIA_PLAYER,
-    title: str = "Kitchen speaker",
+    # The service name comes from the title since 0.2.0, so the default
+    # here is what makes `notify.cast_kitchen` the name under test.
+    title: str = "Kitchen",
     **option_overrides: Any,
 ) -> MockConfigEntry:
     options: dict[str, Any] = {

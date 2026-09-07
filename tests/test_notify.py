@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -21,6 +23,7 @@ from custom_components.cast_notifier.const import (
     DOMAIN,
 )
 from custom_components.cast_notifier.notify import (
+    ENTITY_TRANSLATION_KEY,
     CastNotificationService,
     async_get_service,
 )
@@ -38,16 +41,19 @@ def _entry(**option_overrides: object) -> MockConfigEntry:
     options.update(option_overrides)
     return MockConfigEntry(
         domain=DOMAIN,
+        # `notify.cast_kitchen` is derived from this title, not from the
+        # player's entity id (see tests/test_service_name.py).
+        title="Kitchen",
         unique_id=MEDIA_PLAYER,
         data={CONF_MEDIA_PLAYER: MEDIA_PLAYER},
         options=options,
     )
 
 
-async def test_setup_registers_legacy_service_named_after_the_player(
+async def test_setup_registers_legacy_service_named_after_the_entry(
     hass: HomeAssistant,
 ) -> None:
-    """Setting up the entry registers notify.cast_<object_id>."""
+    """Setting up the entry registers notify.cast_<entry title>."""
     hass.states.async_set(MEDIA_PLAYER, "idle")
     entry = _entry()
     entry.add_to_hass(hass)
@@ -102,7 +108,7 @@ async def test_legacy_service_speaks_the_message(hass: HomeAssistant) -> None:
 async def test_legacy_service_refuses_denied_source_entity(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A denied call raises to the caller and is logged (ADR-015).
+    """A denied call raises to the caller and is logged (ADR-0003).
 
     It used to be logged and swallowed, so the caller got a silent HTTP
     200 for a message nobody ever heard.
@@ -223,7 +229,7 @@ async def test_legacy_service_surfaces_invalid_data(
     """A malformed `data` payload reaches the caller, not a TypeError (I5c).
 
     It is a `ServiceValidationError` -- the call is wrong, not broken --
-    and it is logged as well as raised (ADR-015).
+    and it is logged as well as raised (ADR-0003).
     """
     hass.states.async_set(MEDIA_PLAYER, "idle")
 
@@ -319,3 +325,39 @@ async def test_legacy_platform_refuses_an_unloaded_entry(hass: HomeAssistant) ->
 
     assert await async_get_service(hass, {}, {"entry_id": entry.entry_id}) is None
     assert await async_get_service(hass, {}, {"entry_id": "does-not-exist"}) is None
+
+
+async def test_the_entity_keeps_the_device_name_despite_its_translation_key(
+    hass: HomeAssistant,
+) -> None:
+    """`_attr_translation_key` is for the icon only, never for the name.
+
+    `Entity._name_internal` (`homeassistant/helpers/entity.py`) returns
+    `_attr_name` before it ever looks a translation up, so a class setting
+    `_attr_name = None` still takes its device's name. Getting this wrong
+    is what made every entry collide on `notify.cast_notifier` in 0.1.0.
+    """
+    hass.states.async_set(MEDIA_PLAYER, "idle")
+    entry = _entry()
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = hass.states.async_entity_ids("notify")[0]
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.attributes["friendly_name"] == "Kitchen"
+
+
+def test_the_icon_translation_key_exists_in_icons_json() -> None:
+    """The entity's translation key is the one `icons.json` defines."""
+    icons = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "custom_components"
+            / "cast_notifier"
+            / "icons.json"
+        ).read_text()
+    )
+    assert set(icons["entity"]["notify"]) == {ENTITY_TRANSLATION_KEY}

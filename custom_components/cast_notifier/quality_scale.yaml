@@ -1,11 +1,23 @@
 # Quality scale self-assessment for Cast Notifier.
-# Bronze is the target for this first release. Silver/gold are not
-# assessed yet.
+#
+# Every rule of every scaled tier is assessed, honestly: `done` when the
+# integration really does it, `exempt` with the reason when the rule
+# cannot apply to a helper that owns no device and no connection, and
+# `todo` with what is actually missing when it could apply and does not.
+# The rule list is the one hassfest enforces for core integrations
+# (`script/hassfest/quality_scale.py`, `ALL_RULES`, HA 2026.9.1);
+# hassfest itself skips this file for a custom integration
+# (`validate_iqs_file` returns early when `not integration.core`), so
+# `tests/test_quality_scale.py` checks it instead.
 rules:
   # Bronze
   action-setup:
     status: exempt
-    comment: This integration does not register any custom actions/services.
+    comment: >-
+      This integration registers no custom actions. What it does register
+      is a legacy notify service per config entry, through the discovery
+      helper -- the mechanism `notify` itself defines -- and its lifetime
+      is tied to the entry, not to `async_setup`.
   appropriate-polling:
     status: exempt
     comment: >-
@@ -14,16 +26,27 @@ rules:
       its own; it only calls tts.speak and media_player.* on entities Home
       Assistant already has. There is nothing to poll.
   brands:
-    status: todo
-    comment: Brand assets not yet submitted to home-assistant/brands.
+    status: done
+    comment: >-
+      Icon bundled in-repo under custom_components/cast_notifier/brand/
+      (icon.png and icon@2x.png). Home Assistant serves a custom
+      integration's own brand directory rather than the CDN:
+      homeassistant/components/brands/__init__.py,
+      BrandsIntegrationView._serve_from_custom_integration, gated on
+      Integration.has_branding (homeassistant/loader.py:898) -- both read
+      in the 2026.9.1 checkout. No claim is made here about which release
+      that landed in, or about what the HACS action's own brands check
+      does with it: neither is something this repository can verify.
   common-modules: done
   config-flow: done
   config-flow-test-coverage: done
   dependency-transparency: done
   docs-actions:
     status: exempt
-    comment: No custom services.yaml is shipped; behaviour is configured
-      entirely through the config/options flow.
+    comment: >-
+      No services.yaml is shipped: the legacy notify service takes the
+      `message`/`data` payload the notify domain already documents, and
+      everything else is configured through the config/options flow.
   docs-conditions:
     status: exempt
     comment: This integration does not have any conditions.
@@ -35,7 +58,10 @@ rules:
     comment: This integration does not have any triggers.
   entity-event-setup:
     status: exempt
-    comment: The notify entity does not subscribe to any external event bus.
+    comment: >-
+      The notify entity subscribes to nothing. The only subscription in
+      the integration is the per-announcement state listener in
+      speaker.py, which lives and dies inside one service call.
   entity-unique-id: done
   has-entity-name: done
   runtime-data: done
@@ -49,5 +75,196 @@ rules:
       PLAY_MEDIA, since such a player could never speak.
   test-before-setup:
     status: exempt
-    comment: Same reasoning as test-before-configure.
+    comment: >-
+      There is nothing to test: setup opens no connection, it stores a
+      speaker object and registers two notify surfaces. The configured
+      media_player may legitimately not exist yet, so its absence is not
+      a reason to fail either. after_dependencies: cast only guarantees
+      that the cast component's setup has been awaited before ours
+      (homeassistant/setup.py, the after_dependencies loop at 221); cast
+      entities are added afterwards, from a dispatcher callback fed by a
+      discovery job its own entry does not await
+      (homeassistant/components/cast/media_player.py:151-165). Raising
+      ConfigEntryNotReady on a player that is merely late would put a
+      healthy entry into a retry loop. A player that is really gone
+      surfaces on the first announcement, as a raised
+      HomeAssistantError -- see entity-unavailable, an honest todo.
   unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: done
+    comment: >-
+      Both notify surfaces raise: a refusal (deny_domains, quiet hours) or
+      a malformed data payload is a ServiceValidationError translated
+      through the exceptions section of strings.json, and a failure of
+      tts.speak is a HomeAssistantError. Nothing is swallowed -- see
+      docs/ADR/0003-refusals-raise.md.
+  config-entry-unloading:
+    status: done
+    comment: >-
+      async_unload_entry unloads the notify platform, and an
+      entry.async_on_unload callback retracts the legacy
+      notify.cast_<name> service, which Home Assistant never does for a
+      config entry.
+  docs-configuration-parameters:
+    status: done
+    comment: Every option is documented in the README's options table.
+  docs-installation-parameters:
+    status: done
+    comment: >-
+      The README's Configuration section documents both fields of the
+      setup form and what the picker filters on.
+  entity-unavailable:
+    status: todo
+    comment: >-
+      The notify entity is always available. It could mirror the target
+      player instead -- unavailable while the configured media_player is
+      missing or unavailable -- which would tell an automation author
+      about a renamed player before the next announcement fails rather
+      than after. Not implemented.
+  integration-owner: done
+  log-when-unavailable:
+    status: exempt
+    comment: >-
+      Nothing is connected to, so nothing becomes unavailable in the sense
+      this rule means. A failure belongs to one call and is logged and
+      raised at that call.
+  parallel-updates:
+    status: done
+    comment: >-
+      PARALLEL_UPDATES = 0 in notify.py: nothing polls, and announcements
+      on one player are already serialized by the CastSpeaker's own lock.
+  reauthentication-flow:
+    status: exempt
+    comment: >-
+      No authentication of any kind: the integration calls services on the
+      local instance.
+  test-coverage: done
+
+  # Gold
+  devices:
+    status: done
+    comment: >-
+      One service device per config entry (DeviceEntryType.SERVICE), named
+      after the entry, so several configured players are distinguishable
+      in the UI.
+  diagnostics:
+    status: done
+    comment: >-
+      Entry data and options, the resolved speaker config, the service
+      name, and the volume timeline of the last announcement.
+  discovery:
+    status: exempt
+    comment: >-
+      There is nothing on the network to find: the Cast player is already
+      an entity, discovered by the cast integration, and the user picks it
+      from a selector filtered to that integration.
+  discovery-update-info:
+    status: exempt
+    comment: >-
+      Same reasoning as discovery -- there is no network discovery at all.
+  docs-data-update:
+    status: exempt
+    comment: >-
+      The integration fetches nothing and receives nothing. It acts only
+      when a notify call asks it to.
+  docs-examples:
+    status: done
+    comment: >-
+      The README shows an alert:: notifiers entry and an automation with
+      per-call data overrides.
+  docs-known-limitations:
+    status: done
+    comment: >-
+      docs/known-issues.md, plus the README sections on the deny list and
+      on the up-to-5s wait when the player is already playing.
+  docs-supported-devices:
+    status: done
+    comment: >-
+      The README states what can be configured: any media_player that
+      supports play_media, Cast players being the case it is built for.
+  docs-supported-functions:
+    status: done
+    comment: >-
+      The README documents both surfaces (the legacy service and the
+      notify entity), the options table and the data payload.
+  docs-troubleshooting:
+    status: done
+    comment: >-
+      The README's Troubleshooting section covers the two-line refusal
+      under alert, the late-returning call, and how to read the volume
+      timeline from the log or from diagnostics.
+  docs-use-cases:
+    status: done
+    comment: The README's Why section and the examples.
+  dynamic-devices:
+    status: exempt
+    comment: >-
+      One device per config entry, created at setup. No device can appear
+      later; adding a player means adding an entry.
+  entity-category:
+    status: exempt
+    comment: >-
+      The notify entity is the whole point of the entry, not a
+      configuration or diagnostic entity.
+  entity-device-class:
+    status: exempt
+    comment: The notify domain defines no device classes.
+  entity-disabled-by-default:
+    status: exempt
+    comment: >-
+      One entity per entry, which is the reason the entry exists. There is
+      nothing noisy or rarely used to disable.
+  entity-translations:
+    status: exempt
+    comment: >-
+      The entity deliberately has no name of its own: _attr_has_entity_name
+      with _attr_name = None, so it takes its device's name, which follows
+      the entry title. A translated name would override that and give
+      every entry the same one again -- the collision documented in
+      docs/ARCHITECTURE.md.
+  exception-translations:
+    status: done
+    comment: >-
+      message_refused, invalid_data and quiet_hours are all translated
+      through the exceptions section of strings.json (en, fr, es).
+  icon-translations:
+    status: done
+    comment: >-
+      icons.json gives the notify entity its icon through the translation
+      key `announcement`; no _attr_icon anywhere.
+  reconfiguration-flow:
+    status: todo
+    comment: >-
+      Everything but the media_player is editable in the options flow, and
+      the media_player is the entry's unique ID. Re-pointing an entry at
+      another player therefore means deleting and re-adding it; a
+      reconfigure flow would fix that, and is not implemented.
+  repair-issues:
+    status: todo
+    comment: >-
+      A configured media_player or tts_entity that no longer exists is
+      only visible when the next announcement fails. A repair issue would
+      surface it at the moment it breaks. Not implemented.
+  stale-devices:
+    status: exempt
+    comment: >-
+      The single device belongs to the config entry and goes away with it.
+      No device can become stale on its own.
+
+  # Platinum
+  async-dependency:
+    status: exempt
+    comment: >-
+      No dependency at all (requirements is empty): everything is async
+      calls into Home Assistant's own service bus.
+  inject-websession:
+    status: exempt
+    comment: No HTTP client, so no session to inject.
+  strict-typing:
+    status: done
+    comment: >-
+      mypy runs in strict mode over the whole package in CI
+      (pyproject.toml, tool.mypy). The core .strict-typing list this rule
+      also refers to only exists for core integrations.
